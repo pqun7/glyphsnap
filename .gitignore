@@ -1,0 +1,34 @@
+# Python environments and caches
+.venv/
+.builddeps/
+.qtdeps*/
+.nuitka-cache/
+__pycache__/
+*.py[cod]
+
+# Build and release outputs
+build/
+builds/
+dist/
+*.spec.bak
+
+# Local test and diagnostic artifacts
+test-results/
+smoke-debug/
+source-smoke-output/
+nuitka-runtime-smoke/
+*.log
+*.xml
+*.err.txt
+*.out.txt
+
+# Local input/output documents
+*.pdf
+*.txt
+!requirements*.txt
+
+# IDE and OS files
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
