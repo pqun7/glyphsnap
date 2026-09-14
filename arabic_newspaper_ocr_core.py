@@ -129,6 +129,55 @@ class TextRegion:
 
 
 @dataclass
+class OCRParagraph:
+    """A paragraph reconstructed from neighbouring OCR lines."""
+
+    text: str = ""
+    bbox: list[int] = field(default_factory=list)
+    lines: list[OCRLine] = field(default_factory=list)
+    is_heading: bool = False
+    heading_score: float = 0.0
+    boundary_score: float = 0.0
+    confidence: float = 0.0
+    paragraph_id: str = ""
+
+
+@dataclass
+class OCRBlock:
+    """A layout region after line-to-paragraph reconstruction."""
+
+    block_id: str
+    bbox: list[int] = field(default_factory=list)
+    label: str = "text"
+    text: str = ""
+    lines: list[OCRLine] = field(default_factory=list)
+    paragraphs: list[OCRParagraph] = field(default_factory=list)
+    order_hint: float = 10_000.0
+    column_index: int | None = None
+    confidence: float = 0.0
+
+    @property
+    def region_id(self) -> str:
+        return self.block_id
+
+
+@dataclass
+class OCRColumn:
+    """A right-to-left newspaper column containing ordered OCR blocks."""
+
+    column_id: int
+    bbox: list[int] = field(default_factory=list)
+    blocks: list[OCRBlock] = field(default_factory=list)
+    paragraphs: list[OCRParagraph] = field(default_factory=list)
+    text: str = ""
+    confidence: float = 0.0
+
+    @property
+    def index(self) -> int:
+        return self.column_id
+
+
+@dataclass
 class PageResult:
     page_number: int
     text: str
@@ -139,6 +188,11 @@ class PageResult:
     detected_line_count: int
     included_line_count: int
     orphan_line_count: int
+    regions: list[dict[str, Any]] = field(default_factory=list)
+    columns: list[OCRColumn] = field(default_factory=list)
+    paragraphs: list[OCRParagraph] = field(default_factory=list)
+    image_width: int = 0
+    image_height: int = 0
 
 
 # ============================================================
@@ -841,29 +895,383 @@ def create_regions(blocks: list[dict[str, Any]], lines: list[OCRLine], page_shap
     return list(regions.values()), len(orphan_lines)
 
 
-def build_region_text(region: TextRegion) -> str:
-    if region.lines:
-        lines = sort_lines_inside_region(region.lines)
-        return clean_text_conservative("\n".join(line.final_text for line in lines if line.final_text))
-    return region.text
+def _object_bbox(value: Any) -> list[int]:
+    if isinstance(value, dict):
+        value = value.get("bbox", [])
+    bbox = getattr(value, "bbox", value)
+    try:
+        return [int(v) for v in list(bbox)[:4]]
+    except Exception:
+        return []
 
 
-def build_page_text(regions: list[TextRegion]) -> str:
-    # PP-StructureV3 supplies block_order/read-order hints. We preserve them,
-    # while synthetic orphan regions are inserted at fractional positions near
-    # the closest known region rather than dropped.
-    regions = sorted(
-        regions,
-        key=lambda r: (r.order_hint, bbox_center(r.bbox)[1] if len(r.bbox) >= 4 else 10**9),
-    )
+def _object_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return clean_text_conservative(str(value.get("text", "")))
+    return clean_text_conservative(str(getattr(value, "text", "")))
 
-    paragraphs: list[str] = []
-    for region in regions:
+
+def _object_label(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("label", "") or "").lower().strip()
+    return str(getattr(value, "label", "") or "").lower().strip()
+
+
+def bbox_union(boxes: Iterable[Iterable[float]]) -> list[int]:
+    valid: list[list[float]] = []
+    for box in boxes:
+        values = list(box)[:4]
+        if len(values) >= 4:
+            valid.append(values)
+    if not valid:
+        return []
+    return [
+        int(math.floor(min(float(box[0]) for box in valid))),
+        int(math.floor(min(float(box[1]) for box in valid))),
+        int(math.ceil(max(float(box[2]) for box in valid))),
+        int(math.ceil(max(float(box[3]) for box in valid))),
+    ]
+
+
+def horizontal_overlap(a: Iterable[float], b: Iterable[float]) -> float:
+    aa, bb = list(a)[:4], list(b)[:4]
+    if len(aa) < 4 or len(bb) < 4:
+        return 0.0
+    overlap = max(0.0, min(float(aa[2]), float(bb[2])) - max(float(aa[0]), float(bb[0])))
+    return overlap / max(min(float(aa[2]) - float(aa[0]), float(bb[2]) - float(bb[0])), 1.0)
+
+
+def vertical_gap(upper: Iterable[float], lower: Iterable[float]) -> float:
+    aa, bb = list(upper)[:4], list(lower)[:4]
+    if len(aa) < 4 or len(bb) < 4:
+        return float("inf")
+    return max(0.0, float(bb[1]) - float(aa[3]))
+
+
+def _line_height(line: OCRLine) -> float:
+    bbox = _object_bbox(line)
+    return max(1.0, float(bbox[3] - bbox[1])) if len(bbox) >= 4 else 1.0
+
+
+def score_heading(
+    value: Any,
+    nearby_lines: Iterable[OCRLine] | None = None,
+    label: str | None = None,
+) -> float:
+    """Estimate whether a line/region is a heading using layout-only evidence."""
+    bbox = _object_bbox(value)
+    text = _object_text(value)
+    label_text = (label or _object_label(value)).lower()
+    score = 0.0
+    if any(token in label_text for token in ("title", "header", "heading", "caption")):
+        score += 0.65
+    if text and len(text) <= 90:
+        score += 0.12
+    if text and "\n" not in text:
+        score += 0.05
+    peers = list(nearby_lines or [])
+    if bbox and peers:
+        heights = [_line_height(line) for line in peers if _object_bbox(line)]
+        if heights:
+            median_height = float(np.median(heights))
+            if (bbox[3] - bbox[1]) >= median_height * 1.25:
+                score += 0.18
+        previous = [line for line in peers if _object_bbox(line) and _object_bbox(line)[1] < bbox[1]]
+        if previous:
+            nearest = max(previous, key=lambda line: _object_bbox(line)[3])
+            gap = vertical_gap(_object_bbox(nearest), bbox)
+            if gap > _line_height(nearest) * 1.35:
+                score += 0.15
+    return min(1.0, score)
+
+
+def heading_score(
+    value: Any,
+    nearby_lines: Iterable[OCRLine] | None = None,
+    label: str | None = None,
+) -> float:
+    """Compatibility spelling for :func:`score_heading`."""
+    return score_heading(value, nearby_lines, label)
+
+
+def score_paragraph_boundary(
+    previous: OCRLine | None,
+    current: OCRLine | None,
+    median_line_height: float | None = None,
+) -> float:
+    """Return a 0..1 score for a paragraph break between two lines."""
+    if previous is None or current is None:
+        return 1.0
+    previous_box, current_box = _object_bbox(previous), _object_bbox(current)
+    if len(previous_box) < 4 or len(current_box) < 4:
+        return 0.5
+    height = median_line_height or float(np.median([_line_height(previous), _line_height(current)]))
+    gap_score = min(1.0, vertical_gap(previous_box, current_box) / max(height * 1.8, 1.0))
+    left_shift = abs(current_box[0] - previous_box[0]) / max(height * 2.0, 1.0)
+    indent_score = min(1.0, left_shift)
+    return min(1.0, 0.72 * gap_score + 0.18 * indent_score + 0.10 * (
+        1.0 if not has_arabic(_object_text(previous)) or not has_arabic(_object_text(current)) else 0.0
+    ))
+
+
+def paragraph_boundary_score(
+    previous: OCRLine | None,
+    current: OCRLine | None,
+    median_line_height: float | None = None,
+) -> float:
+    """Compatibility spelling for :func:`score_paragraph_boundary`."""
+    return score_paragraph_boundary(previous, current, median_line_height)
+
+
+def build_region_text(region: TextRegion | OCRBlock | OCRParagraph | dict[str, Any]) -> str:
+    """Build text without losing the region's OCR-line fallback."""
+    lines = region.get("lines", []) if isinstance(region, dict) else getattr(region, "lines", [])
+    if lines:
+        ordered = sort_lines_inside_region(list(lines))
+        return clean_text_conservative(" ".join(line.final_text for line in ordered if line.final_text))
+    paragraphs = region.get("paragraphs", []) if isinstance(region, dict) else getattr(region, "paragraphs", [])
+    if paragraphs:
+        return clean_text_conservative("\n\n".join(_object_text(paragraph) for paragraph in paragraphs if _object_text(paragraph)))
+    if isinstance(region, dict):
+        return clean_text_conservative(str(region.get("text", "")))
+    return clean_text_conservative(str(getattr(region, "text", "")))
+
+
+def _paragraphs_from_lines(lines: list[OCRLine], label: str, block_id: str) -> list[OCRParagraph]:
+    if not lines:
+        return []
+    ordered = sort_lines_inside_region(lines)
+    heights = [_line_height(line) for line in ordered]
+    median_height = float(np.median(heights)) if heights else 1.0
+    paragraphs: list[OCRParagraph] = []
+    current: list[OCRLine] = []
+    current_boundary = 0.0
+
+    def emit(items: list[OCRLine], boundary: float) -> None:
+        if not items:
+            return
+        text = clean_text_conservative(" ".join(line.final_text for line in items if line.final_text))
+        if not text:
+            return
+        paragraph_number = len(paragraphs) + 1
+        boxes = [_object_bbox(line) for line in items]
+        heading = max(score_heading(line, ordered, label) for line in items)
+        confidence = float(np.mean([line.paddle_score for line in items])) if items else 0.0
+        paragraphs.append(OCRParagraph(
+            paragraph_id=f"{block_id}_paragraph_{paragraph_number:04d}",
+            text=text,
+            bbox=bbox_union(boxes),
+            lines=list(items),
+            is_heading=heading >= 0.68 or "title" in label or "header" in label,
+            heading_score=heading,
+            boundary_score=boundary,
+            confidence=confidence,
+        ))
+
+    for line in ordered:
+        if current:
+            boundary = score_paragraph_boundary(current[-1], line, median_height)
+            line_heading = score_heading(line, ordered, label)
+            if boundary >= 0.52 or line_heading >= 0.68:
+                emit(current, current_boundary)
+                current = []
+            current_boundary = boundary
+        current.append(line)
+    emit(current, current_boundary)
+    return paragraphs
+
+
+def create_ocr_blocks(
+    regions: list[TextRegion] | list[dict[str, Any]],
+    image_width: int = 0,
+    image_height: int = 0,
+) -> list[OCRBlock]:
+    """Convert mapped regions into semantic blocks and reconstructed paragraphs."""
+    blocks: list[OCRBlock] = []
+    for index, region in enumerate(regions):
+        if isinstance(region, dict):
+            region_id = str(region.get("region_id", f"block_{index:04d}"))
+            bbox = _object_bbox(region)
+            label = str(region.get("label", "text") or "text")
+            try:
+                order_hint = float(region.get("order_hint", 10_000.0))
+            except (TypeError, ValueError):
+                order_hint = 10_000.0
+            text = clean_text_conservative(str(region.get("text", "")))
+            lines = list(region.get("lines", []))
+        else:
+            region_id = str(region.region_id)
+            bbox = list(region.bbox)
+            label = str(region.label or "text")
+            order_hint = float(region.order_hint)
+            text = clean_text_conservative(region.text)
+            lines = list(region.lines)
+        paragraphs = _paragraphs_from_lines(lines, label.lower(), region_id)
+        if not paragraphs and text:
+            fallback_heading = score_heading({"text": text, "bbox": bbox, "label": label})
+            paragraphs = [OCRParagraph(
+                paragraph_id=f"{region_id}_paragraph_0001",
+                text=text,
+                bbox=bbox,
+                is_heading=fallback_heading >= 0.68,
+                heading_score=fallback_heading,
+            )]
+        block_text = clean_text_conservative("\n\n".join(paragraph.text for paragraph in paragraphs))
+        confidence = float(np.mean([paragraph.confidence for paragraph in paragraphs])) if paragraphs else 0.0
+        blocks.append(OCRBlock(
+            block_id=region_id,
+            bbox=bbox,
+            label=label,
+            text=block_text or text,
+            lines=lines,
+            paragraphs=paragraphs,
+            order_hint=order_hint,
+            confidence=confidence,
+        ))
+    return blocks
+
+
+def detect_columns(
+    blocks: list[OCRBlock],
+    image_width: int = 0,
+    image_height: int = 0,
+    rtl: bool = True,
+) -> list[OCRColumn]:
+    """Cluster blocks into newspaper columns, ordered right-to-left."""
+    if not blocks:
+        return []
+    page_width = max(float(image_width), max((b.bbox[2] for b in blocks if len(b.bbox) >= 4), default=1.0))
+    widths = [b.bbox[2] - b.bbox[0] for b in blocks if len(b.bbox) >= 4]
+    median_width = float(np.median(widths)) if widths else page_width
+    tolerance = max(10.0, median_width * 0.45, page_width * 0.012)
+    clusters: list[list[OCRBlock]] = []
+
+    for block in sorted(blocks, key=lambda item: bbox_center(item.bbox)[0] if len(item.bbox) >= 4 else 0.0, reverse=True):
+        if len(block.bbox) < 4:
+            target = clusters[0] if clusters else []
+            if not clusters:
+                clusters.append(target)
+            target.append(block)
+            continue
+        best_cluster = None
+        best_distance = float("inf")
+        center_x = bbox_center(block.bbox)[0]
+        for cluster in clusters:
+            cluster_box = bbox_union(item.bbox for item in cluster if len(item.bbox) >= 4)
+            if len(cluster_box) < 4:
+                continue
+            distance = max(0.0, max(cluster_box[0], block.bbox[0]) - min(cluster_box[2], block.bbox[2]))
+            if horizontal_overlap(cluster_box, block.bbox) > 0.08 or distance <= tolerance:
+                center_distance = abs(center_x - bbox_center(cluster_box)[0])
+                if center_distance < best_distance:
+                    best_cluster, best_distance = cluster, center_distance
+        if best_cluster is None:
+            clusters.append([block])
+        else:
+            best_cluster.append(block)
+
+    def cluster_center_x(cluster: list[OCRBlock]) -> float:
+        cluster_box = bbox_union(item.bbox for item in cluster if len(item.bbox) >= 4)
+        return bbox_center(cluster_box)[0] if len(cluster_box) >= 4 else 0.0
+
+    clusters.sort(key=cluster_center_x, reverse=rtl)
+    columns: list[OCRColumn] = []
+    for column_index, cluster in enumerate(clusters):
+        ordered = sorted(cluster, key=lambda item: (
+            bbox_center(item.bbox)[1] if len(item.bbox) >= 4 else 10**9,
+            -bbox_center(item.bbox)[0] if len(item.bbox) >= 4 else 0.0,
+        ))
+        for block in ordered:
+            block.column_index = column_index
+        paragraphs = [paragraph for block in ordered for paragraph in block.paragraphs]
+        column_text = clean_text_conservative("\n\n".join(paragraph.text for paragraph in paragraphs))
+        confidence = float(np.mean([block.confidence for block in ordered])) if ordered else 0.0
+        columns.append(OCRColumn(
+            column_id=column_index,
+            bbox=bbox_union(item.bbox for item in ordered),
+            blocks=ordered,
+            paragraphs=paragraphs,
+            text=column_text,
+            confidence=confidence,
+        ))
+    return columns
+
+
+def sort_blocks(
+    blocks: list[OCRBlock],
+    rtl: bool = True,
+    columns: list[OCRColumn] | None = None,
+) -> list[OCRBlock]:
+    """Sort blocks top-to-bottom within right-to-left (or left-to-right) columns."""
+    if columns:
+        order = {id(block): index for index, column in enumerate(columns) for block in column.blocks}
+        return sorted(blocks, key=lambda block: (
+            order.get(id(block), 10**9),
+            bbox_center(block.bbox)[1] if len(block.bbox) >= 4 else 10**9,
+        ))
+    if any(block.column_index is not None for block in blocks):
+        return sorted(blocks, key=lambda block: (
+            block.column_index if block.column_index is not None else 10**9,
+            bbox_center(block.bbox)[1] if len(block.bbox) >= 4 else 10**9,
+        ))
+    return sorted(blocks, key=lambda block: (
+        bbox_center(block.bbox)[0] * (-1 if rtl else 1) if len(block.bbox) >= 4 else 0.0,
+        bbox_center(block.bbox)[1] if len(block.bbox) >= 4 else 10**9,
+    ))
+
+
+def reconstruct_document(
+    regions: list[TextRegion] | list[dict[str, Any]],
+    image_width: int = 0,
+    image_height: int = 0,
+    rtl: bool = True,
+) -> tuple[list[OCRColumn], list[OCRParagraph], str]:
+    """Reconstruct columns, paragraphs, and page text exactly once."""
+    blocks = create_ocr_blocks(regions, image_width, image_height)
+    columns = detect_columns(blocks, image_width, image_height, rtl=rtl)
+    paragraphs = [paragraph for column in columns for paragraph in column.paragraphs]
+    page_text = clean_text_conservative("\n\n".join(paragraph.text for paragraph in paragraphs))
+    return columns, paragraphs, page_text
+
+
+def build_page_text(
+    regions: list[TextRegion] | list[OCRColumn] | list[OCRBlock] | list[dict[str, Any]],
+) -> str:
+    """Build page text from reconstructed columns, with the legacy fallback."""
+    if not regions:
+        return ""
+    first = regions[0]
+    if isinstance(first, OCRColumn) or (isinstance(first, dict) and "blocks" in first):
+        paragraphs: list[str] = []
+        for column in regions:
+            items = column.get("paragraphs", []) if isinstance(column, dict) else column.paragraphs
+            if items:
+                paragraphs.extend(_object_text(item) for item in items if _object_text(item))
+            else:
+                text = _object_text(column)
+                if text:
+                    paragraphs.append(text)
+        return clean_text_conservative("\n\n".join(paragraphs))
+    if isinstance(first, OCRBlock):
+        return clean_text_conservative("\n\n".join(
+            build_region_text(block) for block in sort_blocks(list(regions)) if build_region_text(block)
+        ))
+    paragraphs = []
+    def legacy_order(region: Any) -> tuple[float, float]:
+        raw_order = region.get("order_hint", 10_000.0) if isinstance(region, dict) else getattr(region, "order_hint", 10_000.0)
+        try:
+            order = float(raw_order)
+        except (TypeError, ValueError):
+            order = 10_000.0
+        bbox = _object_bbox(region)
+        return order, bbox_center(bbox)[1] if len(bbox) >= 4 else 10**9
+
+    legacy_regions = sorted(regions, key=legacy_order)
+    for region in legacy_regions:
         text = build_region_text(region)
         if text:
             paragraphs.append(text)
-
-    return "\n\n".join(paragraphs).strip()
+    return clean_text_conservative("\n\n".join(paragraphs))
 
 
 # ============================================================
@@ -918,13 +1326,16 @@ def save_json(path: Path, data: Any) -> None:
 
 
 def save_txt(path: Path, pages: list[PageResult]) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        for page in pages:
+    with open(path, "w", encoding="utf-8-sig") as f:
+        for page_index, page in enumerate(pages):
+            if page_index:
+                f.write("\n\f\n")
             f.write("=" * 100 + "\n")
             f.write(f"صفحة {page.page_number}\n")
             f.write("=" * 100 + "\n\n")
-            f.write(page.text.rstrip())
-            f.write("\n\n")
+            text = build_page_text(page.columns) if page.columns else page.text
+            f.write(text.rstrip())
+            f.write("\n")
 
 
 def set_rtl_paragraph(paragraph) -> None:
@@ -957,17 +1368,45 @@ def save_docx(path: Path, pages: list[PageResult]) -> None:
         heading = document.add_heading(f"صفحة {page.page_number}", level=1)
         set_rtl_paragraph(heading)
 
-        for paragraph_text in page.text.split("\n\n"):
-            paragraph_text = paragraph_text.strip()
-            if not paragraph_text:
-                continue
-            p = document.add_paragraph()
-            set_rtl_paragraph(p)
-            p.paragraph_format.space_after = Pt(7)
-            p.paragraph_format.line_spacing = 1.05
-            run = p.add_run(paragraph_text)
-            run.font.name = "Arial"
-            run.font.size = Pt(11.5)
+        if page.columns:
+            for column in page.columns:
+                if isinstance(column, dict):
+                    paragraphs = column.get("paragraphs", [])
+                    column_text = str(column.get("text", "") or "")
+                    column_id = column.get("column_id", 0)
+                else:
+                    paragraphs = column.paragraphs
+                    column_text = column.text
+                    column_id = column.column_id
+                if not paragraphs and column_text:
+                    paragraphs = [OCRParagraph(
+                        paragraph_id=f"column_{column_id}_fallback",
+                        text=column_text,
+                    )]
+                for paragraph in paragraphs:
+                    paragraph_text = _object_text(paragraph).strip()
+                    if not paragraph_text:
+                        continue
+                    p = document.add_paragraph()
+                    set_rtl_paragraph(p)
+                    p.paragraph_format.space_after = Pt(7)
+                    p.paragraph_format.line_spacing = 1.05
+                    run = p.add_run(paragraph_text)
+                    run.bold = bool(getattr(paragraph, "is_heading", False))
+                    run.font.name = "Arial"
+                    run.font.size = Pt(12 if run.bold else 11.5)
+        else:
+            for paragraph_text in page.text.split("\n\n"):
+                paragraph_text = paragraph_text.strip()
+                if not paragraph_text:
+                    continue
+                p = document.add_paragraph()
+                set_rtl_paragraph(p)
+                p.paragraph_format.space_after = Pt(7)
+                p.paragraph_format.line_spacing = 1.05
+                run = p.add_run(paragraph_text)
+                run.font.name = "Arial"
+                run.font.size = Pt(11.5)
 
         if page_index < len(pages) - 1:
             document.add_page_break()
@@ -1060,7 +1499,12 @@ def process_page(
     ]
 
     regions, orphan_count = create_regions(blocks, verified_lines, original.shape[:2])
-    page_text = build_page_text(regions)
+    image_height, image_width = original.shape[:2]
+    columns, paragraphs, page_text = reconstruct_document(
+        regions,
+        image_width=image_width,
+        image_height=image_height,
+    )
 
     # Coverage invariant: every canonical line must be in a region.
     included_line_count = sum(len(r.lines) for r in regions)
@@ -1100,6 +1544,8 @@ def process_page(
             "line_count": len(region.lines),
             "line_indices": [verified_lines.index(line) for line in region.lines],
         })
+    serial_columns = [asdict(column) for column in columns]
+    serial_paragraphs = [asdict(paragraph) for paragraph in paragraphs]
 
     save_json(
         output_dir / "json" / f"page_{page_number:04d}_audit.json",
@@ -1115,6 +1561,10 @@ def process_page(
             "low_confidence_count": low_confidence,
             "tesseract_used_count": tess_used,
             "regions": serial_regions,
+            "columns": serial_columns,
+            "paragraphs": serial_paragraphs,
+            "image_width": image_width,
+            "image_height": image_height,
             "lines": serial_lines,
         },
     )
@@ -1134,6 +1584,11 @@ def process_page(
         detected_line_count=len(verified_lines),
         included_line_count=included_line_count,
         orphan_line_count=orphan_count,
+        regions=serial_regions,
+        columns=columns,
+        paragraphs=paragraphs,
+        image_width=image_width,
+        image_height=image_height,
     )
 
 
