@@ -10,6 +10,7 @@ __pycache__/
 build/
 builds/
 dist/
+dist-nuitka/
 *.spec.bak
 
 # Local test and diagnostic artifacts

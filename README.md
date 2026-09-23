@@ -79,6 +79,18 @@ the before/after comparison.
 | `ocr_metrics.py` | CER/WER-style evaluation and coverage metrics |
 | `glyphsnap_advanced.py` | Optional PaddleOCR document-layout research pipeline |
 
+## Windows release build
+
+With Nuitka, MSVC, and Inno Setup 6 installed:
+
+```powershell
+.\build_installer.ps1
+```
+
+This builds and smoke-tests GlyphSnap, creates
+`builds\installer\GlyphSnap_Setup.exe`, and prints its SHA-256 checksum. Use
+`.\build_installer.ps1 -SkipAppBuild` to package an existing verified Nuitka build.
+
 ## Technology
 
 Python, PySide6, Tesseract, OpenCV, Pillow, PyMuPDF, NumPy, and optional PaddleOCR.

@@ -103,7 +103,7 @@ Write-Host "PyMuPDF version:" -ForegroundColor DarkGray
 Write-Host $PyMuPDFVersion -ForegroundColor DarkGray
 
 # Output directories
-$OutputDir = Join-Path $PSScriptRoot 'dist-nuitka'
+$OutputDir = Join-Path $PSScriptRoot 'builds\nuitka'
 $DistDir = Join-Path $OutputDir 'glyphsnap.dist'
 $ExePath = Join-Path $DistDir 'GlyphSnap.exe'
 
@@ -142,7 +142,7 @@ $NuitkaArgs = @(
     '--nofollow-import-to=paddleocr',
     '--nofollow-import-to=scipy',
 
-    '--output-dir=dist-nuitka',
+    '--output-dir=builds\nuitka',
     '--output-filename=GlyphSnap.exe',
     'glyphsnap.py'
 )
