@@ -10,7 +10,7 @@ import pymupdf
 from PIL import Image, ImageDraw
 from PySide6.QtWidgets import QApplication
 
-from arabic_newspaper_ocr_qt import OCRWindow
+from glyphsnap_app import OCRWindow
 
 
 ROOT = Path(__file__).resolve().parent
@@ -23,11 +23,11 @@ REPORT_PATH = REPORT_DIR / "ui_smoke_report.txt"
 def create_fixtures() -> None:
     REPORT_DIR.mkdir(exist_ok=True)
     image = Image.new("RGB", (900, 520), "white")
-    ImageDraw.Draw(image).text((60, 80), "Arabic Newspaper OCR - UI smoke test", fill="black")
+    ImageDraw.Draw(image).text((60, 80), "GlyphSnap - UI smoke test", fill="black")
     image.save(IMAGE_PATH)
     document = pymupdf.open()
     page = document.new_page(width=595, height=842)
-    page.insert_text((72, 100), "Arabic Newspaper OCR PDF smoke test")
+    page.insert_text((72, 100), "GlyphSnap PDF smoke test")
     document.save(PDF_PATH)
     document.close()
 

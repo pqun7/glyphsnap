@@ -1,0 +1,79 @@
+{
+  "dataset": "ocr_image_text_ground_truth",
+  "image_count": 9,
+  "encoding": "UTF-8",
+  "images": [
+    {
+      "image_name": "1.jpg",
+      "format": "JPEG",
+      "extension": ".jpg",
+      "width": 585,
+      "height": 1000,
+      "text": "**English Text:**\n\nSuccess is not just about achieving your goals; it's about the lessons you learn along the way. Every failure is a step closer to success, and every challenge is an opportunity for growth. Stay determined, work hard, and never give up.\n\n**Translation in Arabic:**\n\nالنجاح ليس فقط في تحقيق أهدافك؛ بل في الدروس التي تتعلمها على طول الطريق. كل فشل هو خطوة أقرب إلى النجاح، وكل تحدٍ هو فرصة للنمو. ابق مصمماً، واعمل بجد، ولا تستسلم أبداً."
+    },
+    {
+      "image_name": "2.jpg",
+      "format": "JPEG",
+      "extension": ".jpg",
+      "width": 335,
+      "height": 597,
+      "text": "ENGLISH HUSSAM\nكورس قراءة انجليزية مهمة مستوى A2\nDAILY LIFE (الحياة اليومية)\n\nMy name is Adam. I am 24 years old. I\nlive in a small apartment near my\nwork. My daily life is simple, but I like\nit. I wake up at 7:00 in the morning.\nFirst, I wash my face and brush my\nteeth. Then I make breakfast. I usually\neat eggs, bread, and drink tea.\n\nاسمي آدم. عمري 24 سنة أعيش في شقة\nصغيرة بالقرب من عملي. حياتي اليومية\nبسيطة، لكنني أحبها. أستيقظ في الساعة\nصباحا أولا، أغسل وجهي وأنظف أسناني. ثم\nأعد الإفطار عادة ما آكل البيض والخبز وأشرب\nالشاي."
+    },
+    {
+      "image_name": "3.jpg",
+      "format": "JPEG",
+      "extension": ".jpg",
+      "width": 335,
+      "height": 597,
+      "text": "تدرب على كتابة فقرة بسيطة بالانجليزي\n\nTravelling    السفر\n\nTravelling is very fun. I like to visit new places with\nmy family. Last summer, we went to the beach by\ntrain. I saw the big blue sea and played with the\nsand. We took many beautiful photos. Travel helps\nme learn about the world and meet new people. I\nwant to visit many countries in the future.\n\nالسفر ممتع للغاية. أحب زيارة أماكن جديدة مع عائلتي.\nفي الصيف الماضي، ذهبنا إلى الشاطئ بالقطار. رأيت\nالبحر الأزرق الكبير ولعبت بالرمل. التقطنا الكثير من الصور\nالجميلة. السفر يساعدني على التعلم عن العالم ومقابلة\nأشخاص جدد. أريد زيارة بلدان كثيرة في المستقبل.\n\n- تعلم اللغة الانجليزية -"
+    },
+    {
+      "image_name": "4.jpg",
+      "format": "JPEG",
+      "extension": ".jpg",
+      "width": 415,
+      "height": 739,
+      "text": "I wake up in the\nmorning. I drink a cup of\ntea and eat breakfast.\nThen I go outside and\nsee the sun. I walk\nslowly and think about\nmy day.Everything feels\ncalm and nice.\n\nأستيقظ في الصباح. أشرب\nكوب شاي وأتناول الإفطار.\nثم أخرج وأرى الشمس.\nأمشي ببطء وأفكر في\nيومي. كل شيء يبدو هادئاً\nوجميلاً."
+    },
+    {
+      "image_name": "5.jpg",
+      "format": "JPEG",
+      "extension": ".jpg",
+      "width": 415,
+      "height": 739,
+      "text": "7 READING A1\n\n\"My grandma\"\n\nMy grandma is kind. She\nbakes the best cookies in\nthe world. She reads\nstories. We play games. I\nlove my grandma. She\nhugs me tight. I feel happy\nwith her.\n\nجدتي لطيفة. إنها تخبز أفضل\nبسكويت في العالم. تقرأ القصص.\nنلعب الألعاب. أنا أحب جدتي. إنها\nتحتضنني بقوة. أشعر بالسعادة\nمعها."
+    },
+    {
+      "image_name": "6.jpg",
+      "format": "JPEG",
+      "extension": ".jpg",
+      "width": 399,
+      "height": 501,
+      "text": "إذا عرفت تقرأها مستواك A1 في اللغة الإنجليزية\n\nI wake up at 7:00 in the morning. I\nwash my face, get dressed, and eat\nbreakfast. I go to work at 8:00. I\nwork in a small office in the city. I\nwrite emails and talk to customers.\nAt 1:00, I eat lunch with my\ncoworkers. After work, I go home\nand rest. In the evening, I watch TV\nor read a book.\nOn weekends, I visit my family or go\nto the park. I like my simple and\nquiet life. It makes me happy.\n\nالترجمة >>>"
+    },
+    {
+      "image_name": "7.jpg",
+      "format": "JPEG",
+      "extension": ".jpg",
+      "width": 399,
+      "height": 501,
+      "text": "مستواك B1 في اللغة الإنجليزية\nإذا تمكنت من قراءة هذا النص بالكامل\n\nTwo years ago, I started a small\nonline business selling handmade\ncandles. At first, it was just a hobby,\nbut many people liked my products. I\ncreated a website and promoted my\ncandles on social media.\nNow, I receive many orders every\nweek. Running a business is not easy,\nbut it taught me how to manage time,\nsolve problems, and work with\ncustomers. I’m proud of what I’ve\nbuilt and hope to grow even more.\n\nالترجمة >>>"
+    },
+    {
+      "image_name": "8.jpg",
+      "format": "JPEG",
+      "extension": ".jpg",
+      "width": 415,
+      "height": 739,
+      "text": "22 READING A1\n\n\"Helping others\"\n\nPeople help each other every\nday. They smile, share, and\ncare. A friend helps with\nhomework. A family sets the\ntable together. We give food\nto pets. Helping feels good. It\nmakes the world happy. Let's\nhelp each other and spread\nsmiles.\n\nيساعد الناس بعضهم البعض كل يوم.\nيبتسمون ويشاركون ويهتمون. فصديق\nيساعد في الواجبات المنزلية. وعائلة\nتجهز الطاولة معاً. نحن نعطي الطعام\nللحيوانات الأليفة. المساعدة أمر جيد. إنها\nتجعل العالم سعيداً. دعونا نساعد بعضنا\nالبعض وننشر الابتسامات."
+    },
+    {
+      "image_name": "9.png",
+      "format": "PNG",
+      "extension": ".png",
+      "width": 376,
+      "height": 531,
+      "text": "المشكلة 1: [Stephen Root, Boardwalk Empire]\n\nفي عام 1580، أصيب 1500 شخص بالطاعون، لكن 1500 آخرين حققوا 1500 دولار مقابل بيع خدماتهم للقصر. على الرغم من أن الوباء، الذي كان يحتوي على السم كان هو العلاج. الكثير من هؤلاء الأشخاص كانوا يفصلون بينهم وبين بعضهم البعض بمسافة تحتاج إلى 6 خطوات ويقومون بجهود كبيرة ويتعرقون كثيراً في سبيل تحقيق أهدافهم، لكن لسوء الحظ فشلت الأغلبية العظمى منهم، على الرغم من كونهم متعلمين بما فيه الكفاية للمحاولة، فشلوا في البحث عن كل هذه الأرقام في إرشادات GoTranscript ولم يجتازوا الاختبار.\n\nكانت القصة المذكورة أعلاه بوضوح خرافية، على الرغم من أنها ليست جزءاً من الرسائل الفعلية، والتي تعرف أيضاً باسم سفر الرؤيا الموجود في العهد الجديد. على الرغم من أن سفر الرؤيا الفصل 1 الآية 12 يشير إلى سبعة مصابيح ذهبية، إذا استمرت بعد ذلك وقلت إنه كان هناك 12 مصباحاً في نسختي غير المصرح بها، سيتم الحكم عليك بناءً على كيفية تنسيق الأرقام في هذه الجملة الطويلة. تلك المصابيح الذهبية ستكون قيمتها باهظة الثمن اليوم بكل صراحة، وربما تصل إلى 500000 دولار أو ما يقرب من ذلك.\n\nلا يمكن للناسخ بأي حال من الأحوال أن يجني هذا النوع من المال بأمانة في GoTranscrip أو في أي مكان آخر. ومع ذلك، إذا أخذ الناسخ الوقت الكافي للبحث عن جميع الأرقام المستخدمة في هذا الاختبار وتنسيق بعضها بشكل صحيح، فقد يكون هذا الناسخ قادراً على جني مبلغ جيد جداً من المال، على الرغم من أنه ليس بمستوى المصابيح الذهبية.\n\nإذا كان أي من هذه الكلمات قد ذكرت فعلاً في الإرشادات ولم تحصل عليها بشكل صحيح، فالنقطة الأساسية هنا، في حالة عدم فهمك، هي أنه ليس من الصحيح عدم قراءة الإرشادات. وليس هذا مقتصراً على الأرقام فقط. يجب أن تكون قادراً على تنسيق عناوين الوسائط بشكل صحيح، مثل \"office space\" المفضل لعمل المكتب. نصيحة مميزة للمرشحين المتطلعين للعمل كمحرري نصوص، والذين يولون اهتماماً قليلاً."
+    }
+  ]
+}

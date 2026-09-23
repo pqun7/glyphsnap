@@ -22,11 +22,14 @@ class OCRPipelineTests(unittest.TestCase):
         cls.command = locate_tesseract()
         cls.languages = installed_languages(cls.command)
 
-    def test_preprocessing_returns_three_valid_variants(self) -> None:
+    def test_preprocessing_returns_source_and_enhanced_variants(self) -> None:
         image = Image.new("RGB", (640, 220), "white")
         ImageDraw.Draw(image).text((35, 70), "Newspaper archive 1938", fill="black")
         variants = preprocess_variants(image)
-        self.assertEqual([name for name, _ in variants], ["deskewed", "contrast", "adaptive"])
+        self.assertEqual(
+            [name for name, _ in variants],
+            ["original", "scaled-deskewed", "contrast", "adaptive"],
+        )
         self.assertTrue(all(result.width >= image.width for _, result in variants))
 
     def test_deskew_corrects_a_small_rotation(self) -> None:
@@ -59,13 +62,12 @@ class OCRPipelineTests(unittest.TestCase):
     def test_arabic_ocr_on_archival_newspaper_sample(self) -> None:
         if not self.command or "ara" not in self.languages:
             self.skipTest("Tesseract Arabic language data is unavailable")
-        screenshot = Path(__file__).resolve().parent / "docs" / "README-image.png"
-        if not screenshot.is_file():
-            self.skipTest("Archival newspaper screenshot is unavailable")
-        sample = Image.open(screenshot).crop((80, 320, 590, 595))
-        result = recognize(sample, self.command, ["ara"], 6, preprocess=True)
-        self.assertIn("والدكم", result.text)
-        self.assertIn("المناطق", result.text)
+        sample_path = Path(__file__).resolve().parent / "tests" / "8.jpg"
+        if not sample_path.is_file():
+            self.skipTest("Arabic regression sample is unavailable")
+        result = recognize(Image.open(sample_path), self.command, ["ara", "eng"], 3)
+        self.assertIn("يساعد الناس", result.text)
+        self.assertIn("Helping others", result.text)
         self.assertGreater(result.confidence, 60.0)
 
 

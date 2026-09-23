@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-Arabic Historical Newspaper OCR Pro v2
-=======================================
+GlyphSnap Advanced Document OCR
+===============================
 
 Recall-first OCR pipeline for difficult Arabic newspaper scans.
 
@@ -65,7 +65,7 @@ import numpy as np
 
 DEFAULT_DPI = 420
 DEFAULT_DEVICE = "cpu"
-DEFAULT_OUTPUT_DIR = "arabic_newspaper_ocr_output"
+DEFAULT_OUTPUT_DIR = "glyphsnap_output"
 
 PADDLE_LANG = "ar"
 TESSERACT_LANG = "ara"
@@ -1611,7 +1611,7 @@ def parse_args():
 def main():
     args = parse_args()
     if not args.pdf:
-        print('Usage: python arabic_newspaper_ocr_pro_v2.py "your_file.pdf"')
+        print('Usage: python glyphsnap_advanced.py "your_file.pdf"')
         sys.exit(1)
 
     pdf_path = Path(args.pdf).expanduser().resolve()
@@ -1622,7 +1622,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 100)
-    print("ARABIC HISTORICAL NEWSPAPER OCR PRO v2")
+    print("GLYPHSNAP ADVANCED DOCUMENT OCR")
     print("=" * 100)
     print(f"Input : {pdf_path}")
     print(f"Output: {output_dir}")

@@ -1,4 +1,4 @@
-"""Native Windows OCR studio with proper bidirectional Arabic text editing."""
+"""GlyphSnap native Windows OCR application."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ from ocr_engine import (
 from screen_capture import GlobalHotkey, ScreenRegionSelector, capture_virtual_desktop
 
 
-TITLE = "استخراج النص من الصحف العربية"
+TITLE = "GlyphSnap"
 BLUE = "#1769c2"
 
 # Qt Style Sheet: applied once to the whole application in main().
@@ -89,8 +89,8 @@ def crop_image(image: Image.Image, box: tuple[int, int, int, int]) -> Image.Imag
     return image.crop((x1, y1, x2, y2))
 
 
-class ArabicEditor(QPlainTextEdit):
-    """Qt's bidi text engine keeps logical Arabic order while editing."""
+class OCRTextEditor(QPlainTextEdit):
+    """Bidirectional editor for Arabic, English, and mixed OCR output."""
 
     def __init__(self, font_size: int, parent=None) -> None:
         super().__init__(parent)
@@ -108,19 +108,18 @@ class ArabicEditor(QPlainTextEdit):
         self.setPlaceholderText("النص يظهر هنا بعد الاستخراج. يمكنك تحديده وتعديله مباشرة.")
 
     def set_ocr_direction(self, languages: list[str]) -> None:
-        direction = (
-            Qt.LayoutDirection.RightToLeft
-            if any(language in {"ara", "fas", "urd", "heb"} for language in languages)
-            else Qt.LayoutDirection.LeftToRight
-        )
+        has_rtl = any(language in {"ara", "fas", "urd", "heb"} for language in languages)
+        has_ltr = any(language in {"eng", "fra", "deu", "spa", "tur"} for language in languages)
+        if has_rtl and has_ltr:
+            direction = Qt.LayoutDirection.LayoutDirectionAuto
+        elif has_rtl:
+            direction = Qt.LayoutDirection.RightToLeft
+        else:
+            direction = Qt.LayoutDirection.LeftToRight
         self.setLayoutDirection(direction)
         option = self.document().defaultTextOption()
         option.setTextDirection(direction)
-        option.setAlignment(
-            Qt.AlignmentFlag.AlignRight
-            if direction == Qt.LayoutDirection.RightToLeft
-            else Qt.AlignmentFlag.AlignLeft
-        )
+        option.setAlignment(Qt.AlignmentFlag.AlignLeading)
         self.document().setDefaultTextOption(option)
 
 
@@ -447,10 +446,12 @@ class OCRWindow(QMainWindow):
         self.open_shortcut.activated.connect(self.open_file)
         self.save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
         self.save_shortcut.activated.connect(self.save_text)
-        self.capture_shortcut = QShortcut(QKeySequence("Ctrl+Shift+O"), self)
-        self.capture_shortcut.activated.connect(self.start_screen_capture)
-        self.global_hotkey = GlobalHotkey(self.start_screen_capture)
+        self.global_hotkey = GlobalHotkey(self.start_screen_capture, self)
         self.global_hotkey_registered = self.global_hotkey.register()
+        self.capture_shortcut: QShortcut | None = None
+        if not self.global_hotkey_registered:
+            self.capture_shortcut = QShortcut(QKeySequence("Ctrl+Shift+O"), self)
+            self.capture_shortcut.activated.connect(self.start_screen_capture)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll_events)
         self.timer.start(100)
@@ -458,7 +459,7 @@ class OCRWindow(QMainWindow):
         if not self.global_hotkey_registered:
             self._status(
                 "تعذر تسجيل Ctrl+Shift+O كاختصار عام؛ قد يكون مستخدمًا من تطبيق آخر. "
-                "يبقى زر التقاط الشاشة متاحًا."
+                f"يبقى زر التقاط الشاشة متاحًا. (Windows error {self.global_hotkey.error_code})"
             )
 
     def _button(self, label: str, action, primary=False) -> QPushButton:
@@ -478,14 +479,14 @@ class OCRWindow(QMainWindow):
         title.setObjectName("title")
         title.setAlignment(Qt.AlignmentFlag.AlignRight)
         outer.addWidget(title)
-        subtitle = QLabel("افتح الصحيفة، اختر الصفحة، شغّل OCR، ثم راجع النص وصدّره.")
+        subtitle = QLabel("OCR عربي وإنجليزي للصور وPDF وأي جزء من الشاشة — محلي وبدون رفع الملفات.")
         subtitle.setObjectName("muted")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignRight)
         outer.addWidget(subtitle)
 
         self.empty_state = QLabel(
             "اسحب ملف PDF أو صورة هنا\n\n"
-            "حوّل الصحف المصوّرة إلى نص عربي قابل للتحرير\n"
+            "حوّل الصور والمستندات إلى نص قابل للتحرير\n"
             "PDF • PNG • JPG • WEBP • BMP • TIFF"
         )
         self.empty_state.setObjectName("emptyState")
@@ -572,7 +573,7 @@ class OCRWindow(QMainWindow):
         main_head.addStretch(1)
         main_head.addWidget(QLabel("النص المستخرج — عدّله مباشرة"))
         main_layout.addLayout(main_head)
-        self.editor = ArabicEditor(12)
+        self.editor = OCRTextEditor(12)
         self.editor.textChanged.connect(self._mark_dirty)
         main_layout.addWidget(self.editor, 1)
         right.addWidget(main_panel)
@@ -585,7 +586,8 @@ class OCRWindow(QMainWindow):
         region_head.addStretch(1)
         region_head.addWidget(QLabel("نتيجة الجزء المحدد — اسحب الفاصل لتغيير الحجم"))
         region_layout.addLayout(region_head)
-        self.region_editor = ArabicEditor(11)
+        self.region_editor = OCRTextEditor(11)
+        self.region_editor.textChanged.connect(self._update_buttons)
         region_layout.addWidget(self.region_editor, 1)
         hint = QLabel("حدد منطقة من الصورة، راجع النتيجة، ثم استبدل التحديد أو أدرج النص عند المؤشر.")
         hint.setObjectName("muted")
@@ -619,9 +621,9 @@ class OCRWindow(QMainWindow):
     def _populate_languages(self) -> None:
         installed = set(self.available_languages)
         presets = [
+            ("تلقائي — العربية + English", ["ara", "eng"]),
             ("العربية — Arabic", ["ara"]),
             ("English — الإنجليزية", ["eng"]),
-            ("العربية + English", ["ara", "eng"]),
         ]
         for label, languages in presets:
             if all(language in installed for language in languages):
@@ -655,6 +657,8 @@ class OCRWindow(QMainWindow):
     def _mark_dirty(self) -> None:
         if self.path is not None and not self.busy:
             self.file_label.setText(f"{self.path.name}  •  غير محفوظ")
+        if hasattr(self, "save_btn"):
+            self._update_buttons()
 
     def image_view_start_selection(self) -> None:
         self.image_view.start_selection()
@@ -713,6 +717,7 @@ class OCRWindow(QMainWindow):
         self.language_box.setEnabled(not self.busy)
         self.preprocess_box.setEnabled(not self.busy)
         self.dpi_box.setEnabled(not self.busy)
+        self.page_input.setEnabled(self.document is not None and not self.busy)
         self.prev_btn.setEnabled(bool(self.document and self.page_index > 0 and not self.busy))
         self.next_btn.setEnabled(bool(self.document and self.page_index+1 < count and not self.busy))
         self.full_btn.setEnabled(has_image and not self.busy)
@@ -722,13 +727,15 @@ class OCRWindow(QMainWindow):
         self.cancel_btn.setEnabled(self.busy)
         self.crop_btn.setEnabled(bool(self.image_view.selection and not self.busy))
         self.clear_btn.setEnabled(bool(self.image_view.selection and not self.busy))
-        self.save_btn.setEnabled(self.path is not None and not self.busy)
+        self.replace_btn.setEnabled(bool(self.region_editor.toPlainText().strip()) and not self.busy)
+        has_text = bool(self.editor.toPlainText().strip() or self.text_by_page)
+        self.save_btn.setEnabled(self.path is not None and has_text and not self.busy)
 
     def open_file(self) -> None:
         if self.busy:
             return
         filename, _ = QFileDialog.getOpenFileName(
-            self, "اختر صحيفة أو صورة", "",
+            self, "اختر صورة أو مستند PDF", "",
             "PDF والصور (*.pdf *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff);;كل الملفات (*)")
         if filename:
             self.load_file(Path(filename))
@@ -857,8 +864,8 @@ class OCRWindow(QMainWindow):
 
     def _show_screen_selector(self) -> None:
         try:
-            screenshot, geometry = capture_virtual_desktop()
-            selector = ScreenRegionSelector(screenshot, geometry)
+            capture = capture_virtual_desktop()
+            selector = ScreenRegionSelector(capture)
             selector.captured.connect(self._screen_region_captured)
             selector.cancelled.connect(self._screen_capture_cancelled)
             selector.destroyed.connect(lambda: setattr(self, "screen_selector", None))
@@ -963,7 +970,7 @@ class OCRWindow(QMainWindow):
                     texts[index] = self._recognize(
                         render_pdf_page(page, dpi), cmd, 3, languages, preprocess
                     ).text
-                    self.events.put(("progress", f"اكتملت الصفحة {index+1} من {len(doc)}"))
+                    self.events.put(("progress", (index + 1, len(doc))))
             return texts
 
         self._start_worker(job, "all")
@@ -973,7 +980,10 @@ class OCRWindow(QMainWindow):
             while True:
                 kind, payload = self.events.get_nowait()
                 if kind == "progress":
-                    self._status(payload)
+                    completed, total = payload
+                    self.progress.setRange(0, total)
+                    self.progress.setValue(completed)
+                    self._status(f"اكتملت الصفحة {completed} من {total}.")
                     continue
                 self.busy = False
                 self.cancel_event = None
@@ -994,7 +1004,7 @@ class OCRWindow(QMainWindow):
                         self.editor.setPlainText(result.text)
                     self._status(
                         f"اكتمل استخراج الصفحة — ثقة {result.confidence:.1f}% "
-                        f"({self._quality(result)}) — معالجة {result.variant}."
+                        f"({self._quality(result)}) — {result.variant}, PSM {result.psm}."
                     )
                 elif kind == "region":
                     self.region_editor.setPlainText(payload.text)
@@ -1005,6 +1015,8 @@ class OCRWindow(QMainWindow):
                     )
                 elif kind == "screen":
                     image, result = payload
+                    if self.document is not None:
+                        self.document.close()
                     self.path = Path("screen-capture.png")
                     self.document = None
                     self.page_index = 0
@@ -1016,11 +1028,14 @@ class OCRWindow(QMainWindow):
                     self.file_label.setText("لقطة من الشاشة")
                     self.empty_state.setVisible(False)
                     self.content_splitter.setVisible(True)
-                    QApplication.clipboard().setText(result.text)
-                    self._status(
-                        f"اكتمل OCR ونسخ النص — ثقة {result.confidence:.1f}% "
-                        f"({self._quality(result)})."
-                    )
+                    if result.text.strip():
+                        QApplication.clipboard().setText(result.text)
+                        self._status(
+                            f"اكتمل OCR ونسخ النص — ثقة {result.confidence:.1f}% "
+                            f"({self._quality(result)})."
+                        )
+                    else:
+                        self._status("اكتمل الالتقاط، لكن لم يُعثر على نص. جرّب مساحة أكبر أو لغة أخرى.")
                 elif kind == "all":
                     self.text_by_page.update(payload)
                     self.editor.setPlainText(self.text_by_page.get(self.page_index, ""))
@@ -1087,7 +1102,7 @@ class OCRWindow(QMainWindow):
 
 
 def run_smoke_test(pdf_path: Path, output_dir: Path) -> None:
-    app = QApplication.instance() or QApplication(["ArabicNewspaperOCR", "-platform", "offscreen"])
+    app = QApplication.instance() or QApplication(["GlyphSnap", "-platform", "offscreen"])
     pdf_path = pdf_path.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     if not pdf_path.is_file():
@@ -1118,6 +1133,8 @@ def main() -> None:
         run_smoke_test(Path(sys.argv[2]), Path(sys.argv[3]) if len(sys.argv) >= 4 else Path.cwd() / "smoke-output")
         return
     app = QApplication(sys.argv)
+    app.setApplicationName("GlyphSnap")
+    app.setApplicationDisplayName("GlyphSnap")
     icon_path = application_icon()
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))

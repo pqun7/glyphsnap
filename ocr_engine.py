@@ -6,6 +6,7 @@ language selection, confidence scoring, and tests do not depend on Qt.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -37,6 +38,18 @@ class OCRResult:
     confidence: float
     variant: str
     languages: tuple[str, ...]
+    psm: int = 3
+    score: float = 0.0
+    candidates_evaluated: int = 1
+
+
+@dataclass(frozen=True)
+class _OCRCandidate:
+    text: str
+    confidence: float
+    variant: str
+    psm: int
+    score: float
 
 
 def locate_tesseract() -> str | None:
@@ -137,7 +150,8 @@ def deskew(image: np.ndarray) -> tuple[np.ndarray, float]:
 
 
 def preprocess_variants(image: Image.Image) -> list[tuple[str, Image.Image]]:
-    """Create restrained variants suited to clean and degraded documents."""
+    """Create lossless-source and enhanced candidates without committing to one filter."""
+    original = image.convert("RGB")
     bgr = _pil_to_bgr(image)
     height, width = bgr.shape[:2]
     longest = max(height, width)
@@ -145,8 +159,10 @@ def preprocess_variants(image: Image.Image) -> list[tuple[str, Image.Image]]:
         scale = min(3.0, 1800.0 / max(longest, 1))
         bgr = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
-    corrected, _ = deskew(bgr)
+    corrected, angle = deskew(bgr)
     gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY)
+    # Denoising is applied only to derived candidates. The untouched original is
+    # always evaluated as well, so fine Arabic dots cannot be lost globally.
     gray = cv2.fastNlMeansDenoising(gray, None, h=7, templateWindowSize=7, searchWindowSize=21)
     contrast = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8)).apply(gray)
     binary = cv2.adaptiveThreshold(
@@ -157,11 +173,14 @@ def preprocess_variants(image: Image.Image) -> list[tuple[str, Image.Image]]:
         35,
         13,
     )
-    return [
-        ("deskewed", _bgr_to_pil(corrected)),
+    variants = [("original", original)]
+    if abs(angle) >= 0.15 or corrected.shape[1] != image.width or corrected.shape[0] != image.height:
+        variants.append(("scaled-deskewed", _bgr_to_pil(corrected)))
+    variants.extend([
         ("contrast", _bgr_to_pil(contrast)),
         ("adaptive", _bgr_to_pil(binary)),
-    ]
+    ])
+    return variants
 
 
 def _text_from_data(data: dict) -> tuple[str, float]:
@@ -198,6 +217,81 @@ def _text_from_data(data: dict) -> tuple[str, float]:
     return clean_text("\n".join(lines)), average
 
 
+def _script_compatibility(text: str, languages: tuple[str, ...]) -> float:
+    letters = [character for character in text if character.isalpha()]
+    if not letters:
+        return 0.0
+    accepts_arabic = any(language in {"ara", "fas", "urd"} for language in languages)
+    accepts_latin = "eng" in languages or any(
+        language in {"fra", "deu", "spa", "tur"} for language in languages
+    )
+    if not accepts_arabic and not accepts_latin:
+        return 1.0
+    compatible = 0
+    for character in letters:
+        is_arabic = "\u0600" <= character <= "\u06ff" or "\u0750" <= character <= "\u08ff"
+        is_latin = "A" <= character <= "Z" or "a" <= character <= "z"
+        if (is_arabic and accepts_arabic) or (is_latin and accepts_latin):
+            compatible += 1
+    return compatible / len(letters)
+
+
+def _candidate_from_data(
+    data: dict,
+    variant: str,
+    psm: int,
+    languages: tuple[str, ...],
+) -> _OCRCandidate:
+    text, mean_confidence = _text_from_data(data)
+    weighted_total = 0.0
+    character_total = 0
+    for word, raw_confidence in zip(data.get("text", []), data.get("conf", [])):
+        word = str(word).strip()
+        if not word:
+            continue
+        try:
+            confidence = float(raw_confidence)
+        except (TypeError, ValueError):
+            continue
+        if confidence < 0:
+            continue
+        weight = max(1, sum(character.isalnum() for character in word))
+        weighted_total += confidence * weight
+        character_total += weight
+    confidence = weighted_total / character_total if character_total else mean_confidence
+    evidence = sum(character.isalnum() for character in text)
+    compatibility = _script_compatibility(text, languages)
+    # Tesseract's mean confidence alone rewards short partial results. Weighting
+    # it by recognized evidence makes a complete block beat a high-confidence
+    # fragment, while script compatibility suppresses wrong-language gibberish.
+    # Confidence is intentionally nonlinear. Sparse segmentation modes can emit
+    # more characters by accepting noise; requiring strong per-character evidence
+    # prevents those longer but less reliable candidates from winning.
+    source_prior = 1.03 if variant == "original" else 1.0
+    score = (
+        ((confidence / 100.0) ** 4)
+        * evidence
+        * (0.55 + 0.45 * compatibility)
+        * source_prior
+    )
+    return _OCRCandidate(text, confidence, variant, psm, score)
+
+
+def _run_candidate(
+    item: tuple[str, Image.Image, int],
+    command: str,
+    languages: tuple[str, ...],
+) -> _OCRCandidate:
+    name, variant, psm = item
+    data = pytesseract.image_to_data(
+        variant,
+        lang="+".join(languages),
+        config=f"--oem 1 --psm {psm} -c preserve_interword_spaces=1 -c user_defined_dpi=300",
+        output_type=pytesseract.Output.DICT,
+    )
+    return _candidate_from_data(data, name, psm, languages)
+
+
 def recognize(
     image: Image.Image,
     command: str,
@@ -211,21 +305,35 @@ def recognize(
         raise ValueError("Select at least one installed OCR language.")
     pytesseract.pytesseract.tesseract_cmd = command
     variants = preprocess_variants(image) if preprocess else [("original", image.convert("RGB"))]
-    best = OCRResult("", 0.0, variants[0][0], selected)
-    config = f"--oem 1 --psm {psm} -c preserve_interword_spaces=1"
-    for name, variant in variants:
-        data = pytesseract.image_to_data(
-            variant,
-            lang="+".join(selected),
-            config=config,
-            output_type=pytesseract.Output.DICT,
+    primary_jobs = [(name, variant, psm) for name, variant in variants]
+    workers = min(3, len(primary_jobs))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        candidates = list(
+            executor.map(lambda item: _run_candidate(item, command, selected), primary_jobs)
         )
-        text, confidence = _text_from_data(data)
-        candidate = OCRResult(text, confidence, name, selected)
-        # Confidence leads; text coverage breaks near-ties caused by sparse scans.
-        if (
-            candidate.confidence > best.confidence + 1.0
-            or (abs(candidate.confidence - best.confidence) <= 1.0 and len(candidate.text) > len(best.text))
-        ):
-            best = candidate
-    return best
+
+    if preprocess and candidates:
+        ranked_names = []
+        for candidate in sorted(candidates, key=lambda value: value.score, reverse=True):
+            if candidate.variant not in ranked_names:
+                ranked_names.append(candidate.variant)
+        variant_lookup = dict(variants)
+        alternate_jobs: list[tuple[str, Image.Image, int]] = []
+        alternate_psm = 6 if psm != 6 else 3
+        for name in ranked_names[:2]:
+            alternate_jobs.append((name, variant_lookup[name], alternate_psm))
+        with ThreadPoolExecutor(max_workers=min(3, len(alternate_jobs))) as executor:
+            candidates.extend(
+                executor.map(lambda item: _run_candidate(item, command, selected), alternate_jobs)
+            )
+
+    best = max(candidates, key=lambda value: value.score, default=_OCRCandidate("", 0.0, "original", psm, 0.0))
+    return OCRResult(
+        best.text,
+        best.confidence,
+        best.variant,
+        selected,
+        psm=best.psm,
+        score=best.score,
+        candidates_evaluated=len(candidates),
+    )
