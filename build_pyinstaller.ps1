@@ -34,7 +34,7 @@ else {
 $OutputRoot = Join-Path $PSScriptRoot 'builds\pyinstaller'
 $DistDir = Join-Path $OutputRoot 'dist'
 $WorkDir = Join-Path $OutputRoot 'work'
-$ExePath = Join-Path $DistDir 'ArabicNewspaperOCR\ArabicNewspaperOCR.exe'
+$ExePath = Join-Path $DistDir 'GlyphSnap\GlyphSnap.exe'
 $SmokeOutput = Join-Path $OutputRoot 'smoke-output'
 
 if (Test-Path $OutputRoot) { Remove-Item -Recurse -Force $OutputRoot }
@@ -43,7 +43,7 @@ New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 & $Python -m PyInstaller --clean --noconfirm `
     --distpath $DistDir `
     --workpath $WorkDir `
-    ArabicNewspaperOCR.spec
+    GlyphSnap.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
 if (-not (Test-Path $ExePath -PathType Leaf)) { throw "PyInstaller EXE was not created: $ExePath" }
 

@@ -4,7 +4,7 @@ Set-Location $PSScriptRoot
 
 Write-Host ""
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host " Arabic Newspaper OCR - Nuitka Build" -ForegroundColor Cyan
+Write-Host " GlyphSnap - Nuitka Build" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -104,8 +104,8 @@ Write-Host $PyMuPDFVersion -ForegroundColor DarkGray
 
 # Output directories
 $OutputDir = Join-Path $PSScriptRoot 'dist-nuitka'
-$DistDir = Join-Path $OutputDir 'arabic_newspaper_ocr_native.dist'
-$ExePath = Join-Path $DistDir 'ArabicNewspaperOCR.exe'
+$DistDir = Join-Path $OutputDir 'glyphsnap.dist'
+$ExePath = Join-Path $DistDir 'GlyphSnap.exe'
 
 # Clean previous build
 if (Test-Path $OutputDir) {
@@ -143,8 +143,8 @@ $NuitkaArgs = @(
     '--nofollow-import-to=scipy',
 
     '--output-dir=dist-nuitka',
-    '--output-filename=ArabicNewspaperOCR.exe',
-    'arabic_newspaper_ocr_native.py'
+    '--output-filename=GlyphSnap.exe',
+    'glyphsnap.py'
 )
 
 & $Python @NuitkaArgs
@@ -249,7 +249,7 @@ if ($VerifyExitCode -ne 0) {
 Write-Host ""
 Write-Host "Checking distribution contents..." -ForegroundColor Yellow
 
-foreach ($Required in @('ArabicNewspaperOCR.exe', 'pymupdf')) {
+foreach ($Required in @('GlyphSnap.exe', 'pymupdf')) {
     $RequiredPath = Join-Path $DistDir $Required
     if (-not (Test-Path $RequiredPath)) {
         throw "Required distribution item is missing: $Required"

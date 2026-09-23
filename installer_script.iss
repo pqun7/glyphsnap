@@ -1,10 +1,10 @@
-#define MyAppName "Text Extractor OCR"
+#define MyAppName "GlyphSnap"
 #define MyAppVersion "2.0.0"
 #define MyAppPublisher "Ali Alnazer Ahmed"
-#define MyAppExeName "ArabicNewspaperOCR.exe"
+#define MyAppExeName "GlyphSnap.exe"
 
 ; Nuitka standalone output
-#define MySourceFolder "builds\nuitka\arabic_newspaper_ocr_native.dist"
+#define MySourceFolder "builds\nuitka\glyphsnap.dist"
 
 ; Application icon
 #define MyIconFile "assets\app.ico"
@@ -22,7 +22,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 
 OutputDir=builds\installer
-OutputBaseFilename=ArabicNewspaperOCR_Setup
+OutputBaseFilename=GlyphSnap_Setup
 
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -46,7 +46,7 @@ VersionInfoCompany={#MyAppPublisher}
 VersionInfoCopyright=Copyright (C) 2026 {#MyAppPublisher}
 
 ; Prevent multiple installer instances
-AppMutex=TextExtractorOCRInstaller
+AppMutex=GlyphSnapInstaller
 
 [Languages]
 Name: "arabic"; MessagesFile: "compiler:Languages\Arabic.isl"

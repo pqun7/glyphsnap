@@ -1,140 +1,88 @@
-# Arabic Newspaper OCR
+# GlyphSnap
 
-[![Tests](https://github.com/pqun7/arabic-newspaper-ocr/actions/workflows/tests.yml/badge.svg)](https://github.com/pqun7/arabic-newspaper-ocr/actions/workflows/tests.yml)
-[![Python](https://img.shields.io/badge/Python-3.13%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows)](https://www.microsoft.com/windows)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+GlyphSnap is a privacy-first Windows desktop OCR tool for Arabic, English, and mixed
+text. It extracts editable text from images, PDFs, selected image regions, or any area
+of the screen without uploading files.
 
-A privacy-first Windows OCR desktop application for Arabic newspapers, historical
-scans, screenshots, images, and PDFs. It turns difficult document images into
-editable, searchable text without uploading files to a cloud service.
-
-![Arabic Newspaper OCR desktop interface](docs/README-image.png)
-
-## Why this project?
-
-Historical Arabic newspapers combine degraded paper, noise, skew, complex columns,
-and right-to-left text. Generic copy tools often lose text or produce an unreadable
-layout. This project combines document image processing, multilingual OCR, a native
-review workflow, and an optional high-recall research pipeline in one end-to-end AI
-desktop application.
+![GlyphSnap desktop interface](docs/README-image.png)
 
 ## Features
 
-- **Capture anywhere:** press `Ctrl + Shift + O`, select part of any screen, run OCR,
-  review the result, and copy it automatically.
-- **Arabic and multilingual OCR:** Arabic, English, combined Arabic + English, and any
-  additional Tesseract language installed on the computer.
-- **Automatic image enhancement:** conservative deskew, denoise, CLAHE contrast,
-  adaptive thresholding, and resolution-aware upscaling.
-- **Best-result selection:** runs multiple image variants and keeps the result with
-  the strongest OCR confidence and text coverage.
-- **Document workflow:** open PDF/image files, process one page or a complete PDF,
-  select difficult regions, edit bidirectional text, and export UTF-8 text.
-- **Local by design:** no account, server, browser, or file upload.
-- **Auditable advanced pipeline:** optional PaddleOCR layout + recall passes,
-  Tesseract verification, orphan-line preservation, JSON diagnostics, TXT, and DOCX.
+- Arabic, English, and combined Arabic + English OCR
+- System-wide `Ctrl + Shift + O` screen-region capture
+- Native-resolution, DPI-aware capture across multiple monitors
+- Image and multi-page PDF support
+- Adaptive OCR candidate selection using confidence and text coverage
+- Optional deskew, contrast normalization, denoising, thresholding, and upscaling
+- Bidirectional review editor, clipboard copy, and UTF-8 export
+- Fully local processing with Tesseract
 
-## Quick start
+## Requirements
 
-### 1. Install Tesseract
+- Windows 10 or 11
+- Python 3.13+
+- [Tesseract OCR for Windows](https://github.com/UB-Mannheim/tesseract/wiki)
+- Tesseract language data: `ara` and `eng`
 
-Install [Tesseract for Windows](https://github.com/UB-Mannheim/tesseract/wiki) and
-select the Arabic (`ara`) and English (`eng`) language packs. Other installed packs
-appear automatically in the app.
+Verify the language installation:
 
 ```powershell
 tesseract.exe --list-langs
 ```
 
-### 2. Run from source
+## Development setup
 
 ```powershell
-git clone https://github.com/pqun7/arabic-newspaper-ocr.git
-cd arabic-newspaper-ocr
+git clone <repository-url> GlyphSnap
+cd GlyphSnap
 py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python arabic_newspaper_ocr_native.py
+python glyphsnap.py
 ```
 
-Use `Ctrl + Shift + O` from any Windows application, drag over text, then review the
-recognized result in the editor. `Ctrl+O` opens a file and `Ctrl+S` exports text.
+## Usage
 
-## Accuracy and testing
+1. Choose **Open image or PDF**, or press `Ctrl + Shift + O` from any application.
+2. Keep **Auto — Arabic + English** unless the source contains one language only.
+3. Extract the full page or select a smaller region.
+4. Review the confidence indicator and edit the recognized text if needed.
+5. Copy the result or export it as UTF-8 text.
 
-OCR quality depends on the source, language model, scan resolution, and layout. The
-application reports Tesseract's mean word confidence to make review decisions visible;
-this is a useful signal, not a guarantee of correctness.
+The screen overlay is dimmed only for selection. OCR receives the untouched physical
+screen pixels, including on high-DPI displays.
 
-The regression suite covers:
+## Tests and accuracy evaluation
 
-- deskew estimation and preprocessing variants;
-- degraded synthetic English text;
-- a low-quality Arabic newspaper region from the project sample;
-- PDF/image loading and critical UI controls.
+The regression dataset in `tests/` covers Arabic, English, mixed text, small text,
+screen-like images, and dense pages. The benchmark reports character similarity,
+word similarity, missing-token coverage, and punctuation recall.
 
 ```powershell
-python -m unittest -v test_ocr_engine.py
+python -m unittest discover -v
+python benchmark_ocr.py --output test-results\accuracy.json
 python ui_smoke_test.py
 ```
 
-For archival or legally important documents, always compare the output with the scan.
-A public, licensed Arabic newspaper ground-truth dataset is planned for CER/WER
-benchmarking; synthetic tests alone are not presented as production accuracy claims.
+Ground-truth discrepancies are documented in
+[`tests/REFERENCE_NOTES.md`](tests/REFERENCE_NOTES.md); expected text is never changed
+to make tests pass. See the reproducible [accuracy report](docs/accuracy-report.md) for
+the before/after comparison.
 
 ## Architecture
 
-```text
-Screen/PDF/Image
-      │
-      ▼
-Deskew → Denoise → Contrast → Threshold → Upscale
-      │
-      ▼
-Multilingual Tesseract OCR → Confidence-based variant selection
-      │
-      ▼
-RTL/LTR review editor → Copy or UTF-8 export
-```
-
-| Component | Responsibility |
+| Component | Purpose |
 | --- | --- |
-| `arabic_newspaper_ocr_qt.py` | Native Windows UI and document workflow |
-| `ocr_engine.py` | Languages, preprocessing, OCR, and confidence selection |
-| `screen_capture.py` | Global hotkey and multi-monitor region capture |
-| `arabic_newspaper_ocr_core.py` | Optional high-recall newspaper research pipeline |
-| `test_ocr_engine.py` | Repeatable OCR and image-processing regressions |
+| `glyphsnap_app.py` | PySide6 desktop UI and asynchronous workflows |
+| `screen_capture.py` | Native-resolution capture and Windows global hotkey |
+| `ocr_engine.py` | Multilingual OCR, preprocessing, and candidate selection |
+| `ocr_metrics.py` | CER/WER-style evaluation and coverage metrics |
+| `glyphsnap_advanced.py` | Optional PaddleOCR document-layout research pipeline |
 
-Built with Python, PySide6, OpenCV, Pillow, PyMuPDF, Tesseract, and optional
-PaddleOCR. The separation between UI, OCR, and capture code keeps the project easier
-to test, extend, and discuss in ML/AI engineering interviews.
+## Technology
 
-## Build for Windows
-
-Building can take several minutes. Install the requirements and Nuitka, then run:
-
-```powershell
-python -m pip install -r requirements.txt
-python -m pip install nuitka ordered-set zstandard
-.\build_nuitka.ps1
-```
-
-Output: `builds\nuitka\arabic_newspaper_ocr_native.dist\ArabicNewspaperOCR.exe`
-
-To create the installer afterward, open `installer_script.iss` with Inno Setup and
-choose **Build → Compile**. Tesseract and its language data remain separate system
-dependencies.
-
-## Roadmap
-
-- Publish CER/WER results on a licensed Arabic historical newspaper dataset.
-- Integrate the optional PaddleOCR high-recall pipeline into the desktop UI.
-- Add searchable PDF and DOCX export from the main interface.
-- Add configurable shortcut, tray mode, and automatic language detection.
-- Package signed Windows releases with reproducible release notes.
+Python, PySide6, Tesseract, OpenCV, Pillow, PyMuPDF, NumPy, and optional PaddleOCR.
 
 ## License
 
-MIT © 2026 [Ali Alnazer Ahmed](https://github.com/pqun7). Contributions and issue
-reports are welcome.
+MIT © 2026 Ali Alnazer Ahmed.

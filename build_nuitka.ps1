@@ -32,8 +32,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $OutputRoot = Join-Path $PSScriptRoot 'builds\nuitka'
-$DistDir = Join-Path $OutputRoot 'arabic_newspaper_ocr_native.dist'
-$ExePath = Join-Path $DistDir 'ArabicNewspaperOCR.exe'
+$DistDir = Join-Path $OutputRoot 'glyphsnap.dist'
+$ExePath = Join-Path $DistDir 'GlyphSnap.exe'
 $SmokeOutput = Join-Path $OutputRoot 'smoke-output'
 
 $IconFile = Join-Path $PSScriptRoot 'assets\app.ico'
@@ -81,9 +81,9 @@ $NuitkaArgs = @(
     '--nofollow-import-to=scipy',
 
     '--output-dir=builds\nuitka',
-    '--output-filename=ArabicNewspaperOCR.exe',
+    '--output-filename=GlyphSnap.exe',
 
-    'arabic_newspaper_ocr_native.py'
+    'glyphsnap.py'
 )
 
 Write-Host ""

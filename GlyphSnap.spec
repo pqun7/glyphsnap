@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['arabic_newspaper_ocr_native.py'],
+    ['glyphsnap.py'],
     pathex=[],
     binaries=[],
     datas=[('assets/app.ico', 'assets')],
@@ -21,7 +21,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ArabicNewspaperOCR',
+    name='GlyphSnap',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -41,5 +41,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='ArabicNewspaperOCR',
+    name='GlyphSnap',
 )

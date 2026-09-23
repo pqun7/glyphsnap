@@ -17,8 +17,8 @@ foreach ($Module in @('PySide6', 'pymupdf', 'PIL', 'pytesseract')) {
 }
 
 $OutputRoot = Join-Path $PSScriptRoot 'builds\nuitka-debug'
-$DistDir = Join-Path $OutputRoot 'arabic_newspaper_ocr_native.dist'
-$ExePath = Join-Path $DistDir 'ArabicNewspaperOCR.exe'
+$DistDir = Join-Path $OutputRoot 'glyphsnap.dist'
+$ExePath = Join-Path $DistDir 'GlyphSnap.exe'
 $SmokeOutput = Join-Path $OutputRoot 'smoke-output'
 
 if (Test-Path $OutputRoot) { Remove-Item -Recurse -Force $OutputRoot }
@@ -34,8 +34,8 @@ $NuitkaArgs = @(
     '--nofollow-import-to=cv2', '--nofollow-import-to=streamlit',
     '--nofollow-import-to=streamlit_cropper', '--nofollow-import-to=paddle',
     '--nofollow-import-to=paddleocr', '--nofollow-import-to=scipy',
-    "--output-dir=$OutputRoot", '--output-filename=ArabicNewspaperOCR.exe',
-    'arabic_newspaper_ocr_native.py'
+    "--output-dir=$OutputRoot", '--output-filename=GlyphSnap.exe',
+    'glyphsnap.py'
 )
 & $Python @NuitkaArgs
 if ($LASTEXITCODE -ne 0) { throw "Nuitka debug build failed." }
