@@ -10,7 +10,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['streamlit', 'streamlit_cropper', 'paddle', 'paddleocr', 'numpy', 'pandas', 'scipy', 'cv2'],
+    excludes=['streamlit', 'streamlit_cropper', 'paddle', 'paddleocr', 'pandas', 'scipy'],
     noarchive=False,
     optimize=0,
 )

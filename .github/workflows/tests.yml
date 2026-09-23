@@ -1,0 +1,26 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install OCR engine and language packs
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-ara tesseract-ocr-eng libegl1
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile and run tests
+        run: |
+          python -m py_compile ocr_engine.py screen_capture.py arabic_newspaper_ocr_qt.py arabic_newspaper_ocr_core.py
+          python -m unittest -v test_ocr_engine.py
+          python ui_smoke_test.py

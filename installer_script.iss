@@ -1,5 +1,5 @@
 #define MyAppName "Text Extractor OCR"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "2.0.0"
 #define MyAppPublisher "Ali Alnazer Ahmed"
 #define MyAppExeName "ArabicNewspaperOCR.exe"
 

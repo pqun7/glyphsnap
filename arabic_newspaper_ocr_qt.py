@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import queue
-import re
-import shutil
-import subprocess
 import sys
 import threading
 import os
@@ -35,16 +32,24 @@ if getattr(sys, "frozen", False):
         os.add_dll_directory(str(_qt_dir))
 
 import pymupdf
-import pytesseract
 from PIL import Image
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QImage, QKeySequence, QPen, QPixmap, QShortcut, QTextOption
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame, QGraphicsRectItem,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGraphicsRectItem,
     QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSplitter,
     QVBoxLayout, QWidget, QLineEdit,
 )
+
+from ocr_engine import (
+    LANGUAGE_LABELS,
+    OCRResult,
+    installed_languages,
+    locate_tesseract,
+    recognize as run_ocr,
+)
+from screen_capture import GlobalHotkey, ScreenRegionSelector, capture_virtual_desktop
 
 
 TITLE = "استخراج النص من الصحف العربية"
@@ -70,36 +75,6 @@ APP_STYLE = f"""
 """
 
 
-def locate_tesseract() -> str | None:
-    for candidate in (
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-        shutil.which("tesseract"),
-    ):
-        if candidate and Path(candidate).is_file():
-            return str(candidate)
-    return None
-
-
-def check_tesseract(cmd: str | None) -> bool:
-    if not cmd:
-        return False
-    try:
-        result = subprocess.run([cmd, "--list-langs"], capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=15)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and "ara" in result.stdout.splitlines()
-
-
-def clean_text(text: str) -> str:
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = text.replace("\ufeff", "").replace("\u200b", "")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\s+([،؛؟,:.!])", r"\1", text)
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
-
-
 def render_pdf_page(page: pymupdf.Page, dpi: int) -> Image.Image:
     pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csRGB, alpha=False)
     return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
@@ -112,12 +87,6 @@ def crop_image(image: Image.Image, box: tuple[int, int, int, int]) -> Image.Imag
     if x2 - x1 < 8 or y2 - y1 < 8:
         raise ValueError("حدد مساحة أوضح حول النص.")
     return image.crop((x1, y1, x2, y2))
-
-
-def recognize(image: Image.Image, cmd: str, psm: int) -> str:
-    pytesseract.pytesseract.tesseract_cmd = cmd
-    return clean_text(pytesseract.image_to_string(
-        image.convert("RGB"), lang="ara", config=f"--oem 1 --psm {psm}"))
 
 
 class ArabicEditor(QPlainTextEdit):
@@ -137,6 +106,22 @@ class ArabicEditor(QPlainTextEdit):
         self.setFont(font)
         self.setTabChangesFocus(False)
         self.setPlaceholderText("النص يظهر هنا بعد الاستخراج. يمكنك تحديده وتعديله مباشرة.")
+
+    def set_ocr_direction(self, languages: list[str]) -> None:
+        direction = (
+            Qt.LayoutDirection.RightToLeft
+            if any(language in {"ara", "fas", "urd", "heb"} for language in languages)
+            else Qt.LayoutDirection.LeftToRight
+        )
+        self.setLayoutDirection(direction)
+        option = self.document().defaultTextOption()
+        option.setTextDirection(direction)
+        option.setAlignment(
+            Qt.AlignmentFlag.AlignRight
+            if direction == Qt.LayoutDirection.RightToLeft
+            else Qt.AlignmentFlag.AlignLeft
+        )
+        self.document().setDefaultTextOption(option)
 
 
 class ImageView(QGraphicsView):
@@ -453,16 +438,28 @@ class OCRWindow(QMainWindow):
         self.events: queue.Queue = queue.Queue()
         self.busy = False
         self.cancel_event: threading.Event | None = None
+        self.tesseract_command = locate_tesseract()
+        self.available_languages = installed_languages(self.tesseract_command)
+        self.screen_selector: ScreenRegionSelector | None = None
         self.setAcceptDrops(True)
         self._build_ui()
         self.open_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
         self.open_shortcut.activated.connect(self.open_file)
         self.save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
         self.save_shortcut.activated.connect(self.save_text)
+        self.capture_shortcut = QShortcut(QKeySequence("Ctrl+Shift+O"), self)
+        self.capture_shortcut.activated.connect(self.start_screen_capture)
+        self.global_hotkey = GlobalHotkey(self.start_screen_capture)
+        self.global_hotkey_registered = self.global_hotkey.register()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll_events)
         self.timer.start(100)
         self._update_buttons()
+        if not self.global_hotkey_registered:
+            self._status(
+                "تعذر تسجيل Ctrl+Shift+O كاختصار عام؛ قد يكون مستخدمًا من تطبيق آخر. "
+                "يبقى زر التقاط الشاشة متاحًا."
+            )
 
     def _button(self, label: str, action, primary=False) -> QPushButton:
         button = QPushButton(label)
@@ -493,13 +490,24 @@ class OCRWindow(QMainWindow):
         )
         self.empty_state.setObjectName("emptyState")
         self.empty_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        outer.addWidget(self.empty_state, 1)
 
         file_row = QHBoxLayout()
         self.open_btn = self._button("فتح ملف أو صورة", self.open_file, True)
         file_row.addWidget(self.open_btn)
+        self.screen_btn = self._button("التقاط نص من الشاشة  Ctrl+Shift+O", self.start_screen_capture)
+        file_row.addWidget(self.screen_btn)
         self.file_label = QLabel("لم يُفتح ملف بعد")
         file_row.addWidget(self.file_label, 1)
+        file_row.addWidget(QLabel("اللغة"))
+        self.language_box = QComboBox()
+        self.language_box.setMaximumWidth(220)
+        self._populate_languages()
+        self.language_box.currentIndexChanged.connect(self._language_changed)
+        file_row.addWidget(self.language_box)
+        self.preprocess_box = QCheckBox("تحسين تلقائي")
+        self.preprocess_box.setChecked(True)
+        self.preprocess_box.setToolTip("تصحيح الميل، إزالة الضوضاء، تحسين التباين، والتكبير قبل OCR")
+        file_row.addWidget(self.preprocess_box)
         file_row.addWidget(QLabel("دقة PDF"))
         self.dpi_box = QComboBox()
         self.dpi_box.addItems(["180", "240", "300", "360", "420"])
@@ -529,6 +537,7 @@ class OCRWindow(QMainWindow):
             action_row.addWidget(widget)
         action_row.addStretch(1)
         outer.addLayout(action_row)
+        outer.addWidget(self.empty_state, 1)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.content_splitter = splitter
@@ -605,6 +614,40 @@ class OCRWindow(QMainWindow):
         # Keep the action row stable while OCR is running; only its enabled
         # state changes so no temporary button appears or disappears.
         self.cancel_btn.setVisible(True)
+        self._language_changed(self.language_box.currentIndex())
+
+    def _populate_languages(self) -> None:
+        installed = set(self.available_languages)
+        presets = [
+            ("العربية — Arabic", ["ara"]),
+            ("English — الإنجليزية", ["eng"]),
+            ("العربية + English", ["ara", "eng"]),
+        ]
+        for label, languages in presets:
+            if all(language in installed for language in languages):
+                self.language_box.addItem(label, languages)
+        used = {language for _, languages in presets for language in languages}
+        for language, label in LANGUAGE_LABELS.items():
+            if language in installed and language not in used:
+                self.language_box.addItem(label, [language])
+                used.add(language)
+        for language in sorted(installed):
+            if language in used or language == "osd":
+                continue
+            self.language_box.addItem(LANGUAGE_LABELS.get(language, language), [language])
+        if self.language_box.count() == 0:
+            self.language_box.addItem("لا توجد لغات OCR مثبتة", [])
+
+    def selected_languages(self) -> list[str]:
+        value = self.language_box.currentData()
+        return list(value) if isinstance(value, list) else []
+
+    def _language_changed(self, _index: int) -> None:
+        languages = self.selected_languages()
+        self.editor.set_ocr_direction(languages)
+        self.region_editor.set_ocr_direction(languages)
+        if languages:
+            self._status("لغة OCR: " + " + ".join(languages))
 
     def _status(self, text: str) -> None:
         self.status_label.setText(text)
@@ -666,6 +709,9 @@ class OCRWindow(QMainWindow):
         if count and self.page_input.text() != str(self.page_index + 1):
             self.page_input.setText(str(self.page_index + 1))
         self.open_btn.setEnabled(not self.busy)
+        self.screen_btn.setEnabled(not self.busy)
+        self.language_box.setEnabled(not self.busy)
+        self.preprocess_box.setEnabled(not self.busy)
         self.dpi_box.setEnabled(not self.busy)
         self.prev_btn.setEnabled(bool(self.document and self.page_index > 0 and not self.busy))
         self.next_btn.setEnabled(bool(self.document and self.page_index+1 < count and not self.busy))
@@ -757,12 +803,94 @@ class OCRWindow(QMainWindow):
         self.image_view.clear_selection()
 
     def _tesseract(self) -> str | None:
-        cmd = locate_tesseract()
-        if not check_tesseract(cmd):
-            QMessageBox.critical(self, "Tesseract غير جاهز",
-                                 "يلزم Tesseract مع لغة ara في C:\\Program Files\\Tesseract-OCR.")
+        cmd = self.tesseract_command
+        languages = self.selected_languages()
+        if not cmd or not languages:
+            QMessageBox.critical(
+                self,
+                "Tesseract غير جاهز",
+                "ثبّت Tesseract وحزمة لغة واحدة على الأقل، ثم أعد تشغيل التطبيق.",
+            )
+            return None
+        missing = [language for language in languages if language not in self.available_languages]
+        if missing:
+            QMessageBox.critical(
+                self,
+                "حزمة لغة غير مثبتة",
+                "حزم Tesseract المطلوبة غير موجودة: " + ", ".join(missing),
+            )
             return None
         return cmd
+
+    def _recognize(
+        self,
+        image: Image.Image,
+        cmd: str,
+        psm: int,
+        languages: list[str],
+        preprocess: bool,
+    ) -> OCRResult:
+        return run_ocr(
+            image,
+            cmd,
+            languages,
+            psm,
+            preprocess=preprocess,
+        )
+
+    @staticmethod
+    def _quality(result: OCRResult) -> str:
+        if result.confidence >= 85:
+            return "عالية"
+        if result.confidence >= 65:
+            return "متوسطة"
+        return "تحتاج مراجعة"
+
+    def start_screen_capture(self) -> None:
+        if self.busy or self.screen_selector is not None:
+            return
+        if not self._tesseract():
+            return
+        self._status("اختر منطقة من الشاشة، أو اضغط Esc للإلغاء.")
+        self.hide()
+        QTimer.singleShot(180, self._show_screen_selector)
+
+    def _show_screen_selector(self) -> None:
+        try:
+            screenshot, geometry = capture_virtual_desktop()
+            selector = ScreenRegionSelector(screenshot, geometry)
+            selector.captured.connect(self._screen_region_captured)
+            selector.cancelled.connect(self._screen_capture_cancelled)
+            selector.destroyed.connect(lambda: setattr(self, "screen_selector", None))
+            self.screen_selector = selector
+            selector.show()
+            selector.raise_()
+            selector.activateWindow()
+            selector.setFocus()
+        except Exception as exc:
+            self.show()
+            QMessageBox.critical(self, "تعذر التقاط الشاشة", str(exc))
+
+    def _screen_capture_cancelled(self) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._status("أُلغي التقاط الشاشة.")
+
+    def _screen_region_captured(self, image: Image.Image) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        cmd = self._tesseract()
+        if not cmd:
+            return
+        captured = image.convert("RGB")
+        languages = self.selected_languages()
+        preprocess = self.preprocess_box.isChecked()
+        self._start_worker(
+            lambda _cancel: (captured, self._recognize(captured, cmd, 6, languages, preprocess)),
+            "screen",
+        )
 
     def _start_worker(self, job, kind: str) -> None:
         self.busy = True
@@ -793,7 +921,12 @@ class OCRWindow(QMainWindow):
         if cmd:
             image = self.image.copy()
             index = self.page_index
-            self._start_worker(lambda _cancel: (index, recognize(image, cmd, 3)), "full")
+            languages = self.selected_languages()
+            preprocess = self.preprocess_box.isChecked()
+            self._start_worker(
+                lambda _cancel: (index, self._recognize(image, cmd, 3, languages, preprocess)),
+                "full",
+            )
 
     def extract_selection(self) -> None:
         if self.image is None or self.image_view.selection is None or self.busy:
@@ -801,7 +934,12 @@ class OCRWindow(QMainWindow):
         cmd = self._tesseract()
         if cmd:
             image = crop_image(self.image, self.image_view.selection)
-            self._start_worker(lambda _cancel: recognize(image, cmd, 6), "region")
+            languages = self.selected_languages()
+            preprocess = self.preprocess_box.isChecked()
+            self._start_worker(
+                lambda _cancel: self._recognize(image, cmd, 6, languages, preprocess),
+                "region",
+            )
 
     def extract_all(self) -> None:
         if self.document is None or self.path is None or self.busy:
@@ -812,6 +950,8 @@ class OCRWindow(QMainWindow):
         self._remember_page()
         path = self.path
         dpi = int(self.dpi_box.currentText())
+        languages = self.selected_languages()
+        preprocess = self.preprocess_box.isChecked()
 
         def job(cancel_event):
             texts = {}
@@ -820,7 +960,9 @@ class OCRWindow(QMainWindow):
                     if cancel_event.is_set():
                         break
                     page = doc[index]
-                    texts[index] = recognize(render_pdf_page(page, dpi), cmd, 3)
+                    texts[index] = self._recognize(
+                        render_pdf_page(page, dpi), cmd, 3, languages, preprocess
+                    ).text
                     self.events.put(("progress", f"اكتملت الصفحة {index+1} من {len(doc)}"))
             return texts
 
@@ -846,15 +988,39 @@ class OCRWindow(QMainWindow):
                     self.editor.setPlainText(self.text_by_page.get(self.page_index, ""))
                     self._status("تم إلغاء الاستخراج مع الاحتفاظ بالنتائج المكتملة.")
                 elif kind == "full":
-                    index, text = payload
-                    self.text_by_page[index] = text
+                    index, result = payload
+                    self.text_by_page[index] = result.text
                     if self.page_index == index:
-                        self.editor.setPlainText(text)
-                    self._status(f"اكتمل استخراج الصفحة. عدد الأحرف: {len(text)}")
+                        self.editor.setPlainText(result.text)
+                    self._status(
+                        f"اكتمل استخراج الصفحة — ثقة {result.confidence:.1f}% "
+                        f"({self._quality(result)}) — معالجة {result.variant}."
+                    )
                 elif kind == "region":
-                    self.region_editor.setPlainText(payload)
-                    self._fit_region_result(payload)
-                    self._status("اكتمل استخراج الجزء المحدد. راجع النتيجة ثم استبدل النص الخاطئ.")
+                    self.region_editor.setPlainText(payload.text)
+                    self._fit_region_result(payload.text)
+                    self._status(
+                        f"اكتمل الجزء المحدد — ثقة {payload.confidence:.1f}% "
+                        f"({self._quality(payload)}). راجع النتيجة ثم أدرجها."
+                    )
+                elif kind == "screen":
+                    image, result = payload
+                    self.path = Path("screen-capture.png")
+                    self.document = None
+                    self.page_index = 0
+                    self.image = image
+                    self.text_by_page = {0: result.text}
+                    self.image_view.set_image(image)
+                    self.editor.setPlainText(result.text)
+                    self.region_editor.setPlainText("")
+                    self.file_label.setText("لقطة من الشاشة")
+                    self.empty_state.setVisible(False)
+                    self.content_splitter.setVisible(True)
+                    QApplication.clipboard().setText(result.text)
+                    self._status(
+                        f"اكتمل OCR ونسخ النص — ثقة {result.confidence:.1f}% "
+                        f"({self._quality(result)})."
+                    )
                 elif kind == "all":
                     self.text_by_page.update(payload)
                     self.editor.setPlainText(self.text_by_page.get(self.page_index, ""))
@@ -914,6 +1080,7 @@ class OCRWindow(QMainWindow):
         self._status(f"حُفظ النص في {filename}")
 
     def closeEvent(self, event) -> None:
+        self.global_hotkey.close()
         if self.document is not None:
             self.document.close()
         super().closeEvent(event)
@@ -932,11 +1099,12 @@ def run_smoke_test(pdf_path: Path, output_dir: Path) -> None:
         image = render_pdf_page(document[0], 120)
 
     tesseract_cmd = locate_tesseract()
-    if not check_tesseract(tesseract_cmd):
+    languages = installed_languages(tesseract_cmd)
+    if "ara" not in languages:
         raise RuntimeError("Tesseract with the Arabic 'ara' language is required.")
-    text = recognize(image, tesseract_cmd, 3)
+    text = run_ocr(image, tesseract_cmd, ["ara"], 3).text
     region = crop_image(image, (0, 0, max(8, image.width // 2), max(8, image.height // 2)))
-    region_text = recognize(region, tesseract_cmd, 6)
+    region_text = run_ocr(region, tesseract_cmd, ["ara"], 6).text
     export_path = output_dir / f"{pdf_path.stem}_smoke.txt"
     export_path.write_text(text + "\n\n[REGION]\n" + region_text, encoding="utf-8")
     if not export_path.is_file():

@@ -18,12 +18,17 @@ if ($NuitkaInfo -notmatch 'Version C compiler:\s+cl') {
     throw "Nuitka did not detect the MSVC compiler."
 }
 
-foreach ($Module in @('PySide6', 'pymupdf', 'PIL', 'pytesseract')) {
+foreach ($Module in @('PySide6', 'pymupdf', 'PIL', 'pytesseract', 'numpy', 'cv2')) {
     & $Python -c "import $Module; print('$Module OK')"
 
     if ($LASTEXITCODE -ne 0) {
         throw "Missing Python dependency: $Module"
     }
+}
+
+& $Python ui_smoke_test.py
+if ($LASTEXITCODE -ne 0) {
+    throw "Source UI smoke test failed."
 }
 
 $OutputRoot = Join-Path $PSScriptRoot 'builds\nuitka'
@@ -68,9 +73,7 @@ $NuitkaArgs = @(
     '--nofollow-import-to=fitz',
     '--no-deployment-flag=excluded-module-usage',
 
-    '--nofollow-import-to=numpy',
     '--nofollow-import-to=pandas',
-    '--nofollow-import-to=cv2',
     '--nofollow-import-to=streamlit',
     '--nofollow-import-to=streamlit_cropper',
     '--nofollow-import-to=paddle',
@@ -128,7 +131,7 @@ ForEach-Object {
         -Force
 }
 
-$SmokePdf = Join-Path $PSScriptRoot '5636-004.pdf'
+$SmokePdf = Join-Path $PSScriptRoot 'test-results\ui_smoke.pdf'
 
 if (-not (Test-Path $SmokePdf -PathType Leaf)) {
     throw "Smoke test PDF was not found: $SmokePdf"

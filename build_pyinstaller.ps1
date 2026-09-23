@@ -5,10 +5,13 @@ $Python = (Get-Command python -ErrorAction Stop).Source
 & $Python --version
 if ($LASTEXITCODE -ne 0) { throw "Python could not be started." }
 
-foreach ($Module in @('PyInstaller', 'PySide6', 'pymupdf', 'PIL', 'pytesseract')) {
+foreach ($Module in @('PyInstaller', 'PySide6', 'pymupdf', 'PIL', 'pytesseract', 'numpy', 'cv2')) {
     & $Python -c "import $Module; print('$Module OK')"
     if ($LASTEXITCODE -ne 0) { throw "Missing Python dependency: $Module" }
 }
+
+& $Python ui_smoke_test.py
+if ($LASTEXITCODE -ne 0) { throw "Source UI smoke test failed." }
 
 $TesseractCandidates = @(
     'C:\Program Files\Tesseract-OCR\tesseract.exe',
@@ -44,7 +47,7 @@ New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
 if (-not (Test-Path $ExePath -PathType Leaf)) { throw "PyInstaller EXE was not created: $ExePath" }
 
-$SmokePdf = Join-Path $PSScriptRoot '5636-004.pdf'
+$SmokePdf = Join-Path $PSScriptRoot 'test-results\ui_smoke.pdf'
 if (-not (Test-Path $SmokePdf -PathType Leaf)) { throw "Smoke-test PDF was not found: $SmokePdf" }
 New-Item -ItemType Directory -Force -Path $SmokeOutput | Out-Null
 & $ExePath '--smoke-test' $SmokePdf $SmokeOutput

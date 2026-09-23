@@ -66,6 +66,11 @@ if ($LASTEXITCODE -ne 0) {
     throw "pytesseract is not available."
 }
 
+& $Python -c "import cv2, numpy; print('OpenCV OK:', cv2.__version__)"
+if ($LASTEXITCODE -ne 0) {
+    throw "OpenCV or NumPy is not available."
+}
+
 # Locate PyMuPDF
 Write-Host ""
 Write-Host "Locating PyMuPDF..." -ForegroundColor Yellow
@@ -130,9 +135,7 @@ $NuitkaArgs = @(
     '--nofollow-import-to=pymupdf',
 
     # Unused heavy dependencies.
-    '--nofollow-import-to=numpy',
     '--nofollow-import-to=pandas',
-    '--nofollow-import-to=cv2',
     '--nofollow-import-to=streamlit',
     '--nofollow-import-to=streamlit_cropper',
     '--nofollow-import-to=paddle',

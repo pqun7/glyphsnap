@@ -49,7 +49,11 @@ Get-ChildItem -Path $Destination -Recurse -File -Include *.pyd,*.dll | ForEach-O
     Copy-Item -Path $_.FullName -Destination (Join-Path $DistDir $_.Name) -Force
 }
 
-$SmokePdf = Join-Path $PSScriptRoot '5636-004.pdf'
+$SmokePdf = Join-Path $PSScriptRoot 'test-results\ui_smoke.pdf'
+
+if (-not (Test-Path $SmokePdf -PathType Leaf)) {
+    & $Python ui_smoke_test.py
+}
 New-Item -ItemType Directory -Force -Path $SmokeOutput | Out-Null
 & $ExePath '--smoke-test' $SmokePdf $SmokeOutput
 if ($LASTEXITCODE -ne 0) { throw "Nuitka debug runtime smoke test failed." }
