@@ -54,13 +54,24 @@ def main() -> None:
     assert window.region_editor.isVisible()
     assert window.language_box.count() >= 1
     assert window.preprocess_box.isChecked()
+    window._navigate("history")
+    app.processEvents()
+    assert window.pages.currentIndex() == window.page_indices["history"]
+    window._navigate("settings")
+    app.processEvents()
+    assert window.pages.currentIndex() == window.page_indices["settings"]
+    window._navigate("help")
+    app.processEvents()
+    assert window.pages.currentIndex() == window.page_indices["help"]
+    window._navigate("home")
 
     REPORT_PATH.write_text(
         "UI smoke test: PASS\n"
         "Generated PDF opened and rendered: PASS\n"
         "Generated image opened and rendered: PASS\n"
         "Language selector available: PASS\n"
-        "Automatic preprocessing enabled: PASS\n",
+        "Automatic preprocessing enabled: PASS\n"
+        "History, Settings, and Help navigation: PASS\n",
         encoding="utf-8",
     )
     window.close()

@@ -2,11 +2,20 @@ $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
 $VenvPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
-$Python = if (Test-Path $VenvPython -PathType Leaf) {
-    $VenvPython
+$Python = $null
+if (Test-Path $VenvPython -PathType Leaf) {
+    try {
+        & $VenvPython --version *> $null
+        if ($LASTEXITCODE -eq 0) {
+            $Python = $VenvPython
+        }
+    }
+    catch {
+        Write-Warning 'The repository virtual environment is not executable; using system Python.'
+    }
 }
-else {
-    (Get-Command python -ErrorAction Stop).Source
+if (-not $Python) {
+    $Python = (Get-Command python -ErrorAction Stop).Source
 }
 
 & $Python --version
@@ -14,6 +23,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Python could not be started."
 }
 
+$env:NUITKA_CACHE_DIR = Join-Path $PSScriptRoot '.nuitka-cache'
 $NuitkaInfo = (& $Python -m nuitka --version 2>&1 | Out-String)
 
 if ($LASTEXITCODE -ne 0) {
@@ -63,8 +73,6 @@ if (Test-Path $OutputRoot) {
 
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
-$env:NUITKA_CACHE_DIR = Join-Path $PSScriptRoot '.nuitka-cache'
-
 $NuitkaArgs = @(
     '-m', 'nuitka',
     '--standalone',
@@ -74,6 +82,7 @@ $NuitkaArgs = @(
 
     '--windows-icon-from-ico=assets/app.ico',
     '--include-data-files=assets/app.ico=assets/app.ico',
+    '--include-data-dir=assets/icons=assets/icons',
     '--product-name=GlyphSnap',
     '--file-description=GlyphSnap Desktop OCR',
     '--company-name=Ali Alnazer Ahmed',

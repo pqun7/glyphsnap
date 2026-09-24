@@ -5,7 +5,10 @@ a = Analysis(
     ['glyphsnap.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets/app.ico', 'assets')],
+    datas=[
+        ('assets/app.ico', 'assets'),
+        ('assets/icons', 'assets/icons'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
