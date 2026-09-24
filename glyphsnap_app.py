@@ -81,6 +81,15 @@ from glyphsnap_storage import GlyphSnapSettings, HistoryRecord, HistoryStore
 
 TITLE = "GlyphSnap"
 BLUE = "#0877F9"
+REQUIRED_UI_ICONS = {
+    "add_selection", "bold", "bullet_list", "clear", "copy", "dropdown",
+    "extract_page", "extract_selection", "fit_view", "fit_width", "full_image",
+    "glyphsnap_logo", "help", "history", "home", "info", "italic", "language",
+    "next_page", "numbered_list", "ocr_badge", "open_image", "open_pdf",
+    "previous_page", "processing_time", "redo", "reset_selection", "save_pdf",
+    "save_txt", "screen_capture", "select_region", "selected_area", "settings",
+    "success", "underline", "undo", "zoom_in", "zoom_out",
+}
 
 # Qt Style Sheet: applied once to the whole application in main().
 APP_STYLE = f"""
@@ -141,6 +150,9 @@ APP_STYLE = f"""
     QComboBox:focus, QLineEdit:focus {{ border: 2px solid #72AEF8; }}
     QComboBox:disabled, QLineEdit:disabled {{ color: #8A9BB2; background: #F0F3F7; border-color: #E3E9F0; }}
     QComboBox::drop-down {{ border: 0; width: 28px; }}
+    QComboBox::down-arrow {{
+        image: url("{asset_icon('dropdown').as_posix()}"); width: 11px; height: 7px;
+    }}
     QCheckBox {{ color: #304D77; spacing: 7px; background: transparent; }}
     QCheckBox::indicator {{ width: 16px; height: 16px; }}
 
@@ -634,16 +646,20 @@ class OCRWindow(QMainWindow):
 
     @staticmethod
     def _icon_label(name: str, size: int) -> QLabel:
+        return OCRWindow._image_label(name, size, size)
+
+    @staticmethod
+    def _image_label(name: str, width: int, height: int) -> QLabel:
         label = QLabel()
         path = asset_icon(name)
         if path.is_file():
             label.setPixmap(QPixmap(str(path)).scaled(
-                size,
-                size,
+                width,
+                height,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             ))
-        label.setFixedSize(size, size)
+        label.setFixedSize(width, height)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         return label
 
@@ -694,8 +710,8 @@ class OCRWindow(QMainWindow):
         title = QLabel(TITLE)
         title.setObjectName("title")
         brand_title.addWidget(title)
-        badge = QLabel("OCR")
-        badge.setObjectName("ocrBadge")
+        badge = self._image_label("ocr_badge", 43, 25)
+        badge.setAccessibleName("OCR")
         brand_title.addWidget(badge)
         brand_title.addStretch(1)
         brand.addLayout(brand_title)
@@ -813,6 +829,7 @@ class OCRWindow(QMainWindow):
         hot_copy.setObjectName("smallMeta")
         hotkey_layout.addWidget(hot_copy)
         learn = self._button("Learn more", lambda: self._navigate("help"), object_name="ghost")
+        self._set_icon(learn, "help", 15)
         learn.setMinimumHeight(28)
         hotkey_layout.addWidget(learn)
         layout.addWidget(hotkey)
@@ -914,8 +931,10 @@ class OCRWindow(QMainWindow):
         actions = QHBoxLayout()
         actions.addStretch(1)
         open_empty = self._button("فتح ملف", lambda: self.open_file(), True)
+        self._set_icon(open_empty, "open_image", 19)
         actions.addWidget(open_empty)
         capture_empty = self._button("التقاط من الشاشة", self.start_screen_capture)
+        self._set_icon(capture_empty, "screen_capture", 19)
         actions.addWidget(capture_empty)
         actions.addStretch(1)
         layout.addLayout(actions)
@@ -973,7 +992,7 @@ class OCRWindow(QMainWindow):
         page_row = QHBoxLayout(self.page_controls)
         page_row.setContentsMargins(0, 0, 0, 0)
         page_row.setSpacing(7)
-        self.prev_btn = self._icon_button("‹", lambda: self._go_page(-1), "Previous PDF page.")
+        self.prev_btn = self._icon_button("", lambda: self._go_page(-1), "Previous PDF page.", "previous_page")
         page_row.addWidget(self.prev_btn)
         self.page_input = QLineEdit()
         self.page_input.setFixedWidth(48)
@@ -985,10 +1004,11 @@ class OCRWindow(QMainWindow):
         self.page_label = QLabel("of 0")
         self.page_label.setObjectName("smallMeta")
         page_row.addWidget(self.page_label)
-        self.next_btn = self._icon_button("›", lambda: self._go_page(1), "Next PDF page.")
+        self.next_btn = self._icon_button("", lambda: self._go_page(1), "Next PDF page.", "next_page")
         page_row.addWidget(self.next_btn)
         page_row.addStretch(1)
         self.all_btn = self._button("Extract Entire PDF", self.extract_all, tooltip="Run OCR on every page in this PDF.")
+        self._set_icon(self.all_btn, "open_pdf", 18)
         page_row.addWidget(self.all_btn)
         layout.addWidget(self.page_controls)
 
@@ -1033,7 +1053,7 @@ class OCRWindow(QMainWindow):
         crop_col.addWidget(crop_shortcut)
         tools.addLayout(crop_col)
         self.full_btn = self._button("Extract Full Page", self.extract_current, tooltip="Extract text from the full image — Alt + Enter")
-        self._set_icon(self.full_btn, "text_file", 20)
+        self._set_icon(self.full_btn, "extract_page", 20)
         full_col = QVBoxLayout()
         full_col.setSpacing(1)
         full_col.addWidget(self.full_btn)
@@ -1043,6 +1063,7 @@ class OCRWindow(QMainWindow):
         full_col.addWidget(full_shortcut)
         tools.addLayout(full_col)
         self.cancel_btn = self._button("Cancel", self.cancel_ocr, tooltip="Cancel OCR after the current operation finishes.", object_name="danger")
+        self._set_icon(self.cancel_btn, "clear", 17)
         tools.addWidget(self.cancel_btn)
         toolbar_layout.addLayout(tools)
         layout.addWidget(toolbar)
@@ -1128,6 +1149,7 @@ class OCRWindow(QMainWindow):
         self.region_editor.textChanged.connect(self._update_buttons)
         layout.addWidget(self.region_editor, 1)
         self.replace_btn = self._button("Insert in Text", self.replace_text, True, "Insert this result at the current editor cursor.")
+        self._set_icon(self.replace_btn, "add_selection", 18)
         layout.addWidget(self.replace_btn)
         return panel
 
@@ -1252,7 +1274,9 @@ class OCRWindow(QMainWindow):
         self.settings_language_box = QComboBox()
         for index in range(self.language_box.count()):
             self.settings_language_box.addItem(
-                self.language_box.itemText(index), self.language_box.itemData(index)
+                self.language_box.itemIcon(index),
+                self.language_box.itemText(index),
+                self.language_box.itemData(index),
             )
         card_layout.addWidget(self.settings_language_box)
 
@@ -1281,6 +1305,7 @@ class OCRWindow(QMainWindow):
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         reset = self._button("Reset Defaults", self._reset_preferences, object_name="subtle")
+        self._set_icon(reset, "reset_selection", 17)
         buttons.addWidget(reset)
         apply_button = self._button("Apply Settings", self._apply_preferences, True)
         self._set_icon(apply_button, "settings", 18)
@@ -1407,12 +1432,14 @@ class OCRWindow(QMainWindow):
         self._set_icon(copy_button, "copy", 17)
         layout.addWidget(copy_button)
         open_button = self._button("Open", lambda _checked=False, item=record: self._open_history(item), object_name="subtle")
+        self._set_icon(open_button, "open_image", 17)
         source_exists = bool(record.source_path and Path(record.source_path).is_file())
         open_button.setEnabled(source_exists)
         if not source_exists:
             open_button.setToolTip("The source file is unavailable. Copy the saved text instead.")
         layout.addWidget(open_button)
         delete_button = self._button("Delete", lambda _checked=False, item=record: self._delete_history(item), object_name="danger")
+        self._set_icon(delete_button, "clear", 17)
         layout.addWidget(delete_button)
         return row
 
@@ -1499,6 +1526,7 @@ class OCRWindow(QMainWindow):
 
     def _populate_languages(self) -> None:
         installed = set(self.available_languages)
+        language_icon = QIcon(str(asset_icon("language")))
         presets = [
             ("Arabic + English (ara+eng)", ["ara", "eng"]),
             ("Arabic (ara)", ["ara"]),
@@ -1506,18 +1534,20 @@ class OCRWindow(QMainWindow):
         ]
         for label, languages in presets:
             if all(language in installed for language in languages):
-                self.language_box.addItem(label, languages)
+                self.language_box.addItem(language_icon, label, languages)
         used = {language for _, languages in presets for language in languages}
         for language, label in LANGUAGE_LABELS.items():
             if language in installed and language not in used:
-                self.language_box.addItem(label, [language])
+                self.language_box.addItem(language_icon, label, [language])
                 used.add(language)
         for language in sorted(installed):
             if language in used or language == "osd":
                 continue
-            self.language_box.addItem(LANGUAGE_LABELS.get(language, language), [language])
+            self.language_box.addItem(
+                language_icon, LANGUAGE_LABELS.get(language, language), [language]
+            )
         if self.language_box.count() == 0:
-            self.language_box.addItem("لا توجد لغات OCR مثبتة", [])
+            self.language_box.addItem(language_icon, "لا توجد لغات OCR مثبتة", [])
 
     def _pdf_dpi(self) -> int:
         return int(self.dpi_box.currentText().split()[0])
