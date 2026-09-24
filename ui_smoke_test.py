@@ -10,7 +10,7 @@ import pymupdf
 from PIL import Image, ImageDraw
 from PySide6.QtWidgets import QApplication
 
-from glyphsnap_app import OCRWindow
+from glyphsnap_app import OCRWindow, REQUIRED_UI_ICONS, asset_icon
 
 
 ROOT = Path(__file__).resolve().parent
@@ -35,6 +35,8 @@ def create_fixtures() -> None:
 def main() -> None:
     create_fixtures()
     app = QApplication.instance() or QApplication(sys.argv)
+    missing_icons = [name for name in sorted(REQUIRED_UI_ICONS) if not asset_icon(name).is_file()]
+    assert not missing_icons, f"Missing packaged UI icons: {missing_icons}"
     window = OCRWindow()
     window.show()
     app.processEvents()
@@ -54,13 +56,25 @@ def main() -> None:
     assert window.region_editor.isVisible()
     assert window.language_box.count() >= 1
     assert window.preprocess_box.isChecked()
+    window._navigate("history")
+    app.processEvents()
+    assert window.pages.currentIndex() == window.page_indices["history"]
+    window._navigate("settings")
+    app.processEvents()
+    assert window.pages.currentIndex() == window.page_indices["settings"]
+    window._navigate("help")
+    app.processEvents()
+    assert window.pages.currentIndex() == window.page_indices["help"]
+    window._navigate("home")
 
     REPORT_PATH.write_text(
         "UI smoke test: PASS\n"
         "Generated PDF opened and rendered: PASS\n"
         "Generated image opened and rendered: PASS\n"
         "Language selector available: PASS\n"
-        "Automatic preprocessing enabled: PASS\n",
+        "Automatic preprocessing enabled: PASS\n"
+        "All required semantic UI icons available: PASS\n"
+        "History, Settings, and Help navigation: PASS\n",
         encoding="utf-8",
     )
     window.close()

@@ -15,6 +15,9 @@ of the screen without uploading files.
 - Adaptive OCR candidate selection using confidence and text coverage
 - Optional deskew, contrast normalization, denoising, thresholding, and upscaling
 - Bidirectional review editor, clipboard copy, and UTF-8 export
+- Local OCR history with copy, reopen, and delete actions
+- Persistent language, PDF DPI, and preprocessing preferences
+- Real processing-time, language, word-count, and selection-area status
 - Fully local processing with Tesseract
 
 ## Requirements

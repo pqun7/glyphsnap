@@ -7,6 +7,8 @@ import sys
 import threading
 import os
 import ctypes
+import time
+from datetime import datetime
 from pathlib import Path
 
 # PyInstaller extracts the Qt runtime beside the executable.  Register those
@@ -22,6 +24,14 @@ def application_dir() -> Path:
 
 def application_icon() -> Path:
     return application_dir() / "assets" / "app.ico"
+
+
+def asset_icon(name: str) -> Path:
+    return application_dir() / "assets" / "icons" / f"{name}.png"
+
+
+def logo_path() -> Path:
+    return asset_icon("glyphsnap_logo")
 
 
 def configure_windows_identity() -> None:
@@ -45,13 +55,17 @@ if getattr(sys, "frozen", False):
 
 import pymupdf
 from PIL import Image
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QImage, QKeySequence, QPen, QPixmap, QShortcut, QTextOption
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
+from PySide6.QtGui import (
+    QBrush, QColor, QFont, QIcon, QImage, QKeySequence, QPen, QPixmap,
+    QShortcut, QTextCharFormat, QTextListFormat, QTextOption,
+)
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGraphicsRectItem,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGraphicsEllipseItem,
+    QGraphicsRectItem,
     QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMainWindow,
-    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSplitter,
-    QVBoxLayout, QWidget, QLineEdit,
+    QMessageBox, QProgressBar, QPushButton, QScrollArea,
+    QSplitter, QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QLineEdit,
 )
 
 from ocr_engine import (
@@ -62,28 +76,96 @@ from ocr_engine import (
     recognize as run_ocr,
 )
 from screen_capture import GlobalHotkey, ScreenRegionSelector, capture_virtual_desktop
+from glyphsnap_storage import GlyphSnapSettings, HistoryRecord, HistoryStore
 
 
 TITLE = "GlyphSnap"
-BLUE = "#1769c2"
+BLUE = "#0877F9"
+REQUIRED_UI_ICONS = {
+    "add_selection", "bold", "bullet_list", "clear", "copy", "dropdown",
+    "extract_page", "extract_selection", "fit_view", "fit_width", "full_image",
+    "glyphsnap_logo", "help", "history", "home", "info", "italic", "language",
+    "next_page", "numbered_list", "ocr_badge", "open_image", "open_pdf",
+    "previous_page", "processing_time", "redo", "reset_selection", "save_pdf",
+    "save_txt", "screen_capture", "select_region", "selected_area", "settings",
+    "success", "underline", "undo", "zoom_in", "zoom_out",
+}
 
 # Qt Style Sheet: applied once to the whole application in main().
 APP_STYLE = f"""
-    QMainWindow, QWidget {{ background: #f3f6fa; color: #17243b; font: 10pt 'Segoe UI'; }}
-    QLabel#title {{ font: bold 17pt 'Segoe UI'; }}
-    QLabel#muted {{ color: #52647b; }}
-    QFrame#panel {{ background: white; border: 1px solid #d8e1ed; border-radius: 8px; }}
-    QFrame#regionPanel {{ background: #edf4fc; border: 1px solid #ccdef3; border-radius: 8px; }}
-    QPlainTextEdit {{ background: white; border: 1px solid #c9d5e3; border-radius: 5px;
-                      padding: 9px; selection-background-color: #b7d8fa; selection-color: #17243b; }}
-    QLabel#emptyState {{ background: white; border: 2px dashed #b8cce2; border-radius: 12px;
-                         color: #52647b; font: 13pt 'Segoe UI'; padding: 42px; }}
-    QPushButton {{ background: white; border: 1px solid #c5d2e2; border-radius: 5px; padding: 7px 12px; }}
-    QPushButton:hover {{ background: #e8f2fc; }}
-    QPushButton:disabled {{ color: #8a99aa; background: #edf1f5; }}
-    QPushButton#primary {{ background: {BLUE}; color: white; border-color: {BLUE}; }}
-    QPushButton#primary:hover {{ background: #0d519a; }}
-    QSplitter::handle {{ background: #cad8e8; }}
+    QMainWindow, QWidget {{ background: #F4F8FC; color: #081A3A; font: 10pt "Segoe UI"; }}
+    QLabel {{ background: transparent; }}
+    QWidget#sectionText {{ background: transparent; }}
+    QLabel#title {{ color: #081A3A; font: 700 17pt "Segoe UI"; }}
+    QLabel#subtitle, QLabel#muted, QLabel#helper {{ color: #536B8F; }}
+    QLabel#sectionTitle {{ color: #081A3A; font: 700 11.5pt "Segoe UI"; }}
+    QLabel#settingLabel {{ color: #304D77; font: 9.5pt "Segoe UI"; }}
+    QLabel#panelTitle {{ color: #081A3A; font: 700 12pt "Segoe UI"; }}
+    QLabel#pageTitle {{ color: #081A3A; font: 700 18pt "Segoe UI"; }}
+    QLabel#smallMeta {{ color: #536B8F; font: 9pt "Segoe UI"; }}
+    QLabel#blueBadge {{ color: #0877F9; background: #EAF3FF; border-radius: 11px; padding: 4px 10px; font: 9pt "Segoe UI"; }}
+    QLabel#greenBadge {{ color: #11885B; background: #E8F8F1; border-radius: 11px; padding: 4px 10px; font: 600 9pt "Segoe UI"; }}
+    QLabel#ocrBadge {{ color: white; background: #0877F9; border-radius: 5px; padding: 2px 6px; font: 700 8pt "Segoe UI"; }}
+    QLabel#metricTitle {{ color: #536B8F; font: 9pt "Segoe UI"; }}
+    QLabel#metricValue {{ color: #081A3A; font: 600 10pt "Segoe UI"; }}
+    QLabel#shortcut {{ color: #4D78B7; font: 8pt "Segoe UI"; }}
+
+    QFrame#appHeader {{ background: #FFFFFF; border-bottom: 1px solid #DEE8F2; }}
+    QFrame#sidebar {{ background: #FFFFFF; border-right: 1px solid #DEE8F2; }}
+    QFrame#surfaceCard, QFrame#panel, QFrame#sourceCard, QFrame#statusCard {{
+        background: #FFFFFF; border: 1px solid #DEE8F2; border-radius: 12px;
+    }}
+    QFrame#pageCard, QFrame#historyCard {{ background: #FFFFFF; border: 1px solid #DEE8F2; border-radius: 12px; }}
+    QFrame#toolbar, QFrame#regionToolbar {{ background: #F8FBFE; border: 1px solid #DEE8F2; border-radius: 9px; }}
+    QFrame#separator {{ background: #DEE8F2; min-width: 1px; max-width: 1px; border: 0; }}
+    QFrame#regionPanel {{ background: #F8FBFE; border: 1px solid #DEE8F2; border-radius: 9px; }}
+    QFrame#hotkeyCard {{ background: #F8FBFE; border: 1px solid #DEE8F2; border-radius: 10px; }}
+    QFrame#emptyState {{ background: #FFFFFF; border: 1px solid #DEE8F2; border-radius: 12px; }}
+
+    QPushButton {{ min-height: 38px; background: #FFFFFF; color: #081A3A; border: 1px solid #CBD9E8;
+        border-radius: 8px; padding: 0 13px; font: 600 9.5pt "Segoe UI"; }}
+    QPushButton:hover {{ background: #F8FBFE; border-color: #9DB5D0; }}
+    QPushButton:pressed {{ background: #EDF3F9; }}
+    QPushButton:focus {{ border: 2px solid #72AEF8; }}
+    QPushButton:disabled {{ color: #8A9BB2; background: #F0F3F7; border-color: #E3E9F0; }}
+    QPushButton#primary {{ background: {BLUE}; color: #FFFFFF; border-color: {BLUE}; }}
+    QPushButton#primary:hover {{ background: #066BE4; border-color: #066BE4; }}
+    QPushButton#primary:pressed {{ background: #075DC3; border-color: #075DC3; }}
+    QPushButton#subtle {{ background: #FFFFFF; border-color: #DEE8F2; }}
+    QPushButton#ghost {{ background: transparent; border-color: transparent; }}
+    QPushButton#ghost:hover {{ background: #EAF3FF; color: #0877F9; }}
+    QPushButton#iconButton {{ min-width: 38px; max-width: 38px; padding: 0; background: #FFFFFF; border-color: #DEE8F2; font: 700 12pt "Segoe UI Symbol"; }}
+    QPushButton#toolButton {{ min-width: 36px; max-width: 42px; min-height: 34px; max-height: 34px; padding: 0; border-radius: 6px; border-color: transparent; font: 600 11pt "Segoe UI"; }}
+    QPushButton#toolButton:hover {{ background: #EAF3FF; border-color: #D4E7FF; }}
+    QPushButton#danger {{ color: #E85050; background: #FFF3F3; border-color: #F6CACA; }}
+    QPushButton#navItem {{ min-height: 56px; text-align: left; padding: 4px 12px; background: transparent; border: 0; border-radius: 10px; color: #17345F; font: 9.5pt "Segoe UI"; }}
+    QPushButton#navItem:hover {{ background: #F2F7FD; }}
+    QPushButton#navItem[selected="true"] {{ background: #EAF3FF; color: #0877F9; border-left: 3px solid #0877F9; font-weight: 600; }}
+    QPushButton#sourceTile {{ min-height: 58px; text-align: left; padding: 7px 14px; background: #F8FBFE; border-color: #DEE8F2; }}
+    QPushButton#sourceTile:hover {{ background: #F3F8FD; border-color: #AFC9E7; }}
+    QPushButton#sourceTile[selected="true"] {{ background: #F0F7FF; color: #081A3A; border: 2px solid #0877F9; }}
+
+    QComboBox, QLineEdit {{ min-height: 40px; background: #FFFFFF; color: #081A3A; border: 1px solid #CBD9E8; border-radius: 8px; padding: 0 10px; selection-background-color: #D8EAFE; }}
+    QComboBox:hover, QLineEdit:hover {{ border-color: #9DB5D0; }}
+    QComboBox:focus, QLineEdit:focus {{ border: 2px solid #72AEF8; }}
+    QComboBox:disabled, QLineEdit:disabled {{ color: #8A9BB2; background: #F0F3F7; border-color: #E3E9F0; }}
+    QComboBox::drop-down {{ border: 0; width: 28px; }}
+    QComboBox::down-arrow {{
+        image: url("{asset_icon('dropdown').as_posix()}"); width: 11px; height: 7px;
+    }}
+    QCheckBox {{ color: #304D77; spacing: 7px; background: transparent; }}
+    QCheckBox::indicator {{ width: 16px; height: 16px; }}
+
+    QTextEdit, QPlainTextEdit {{ background: #FFFFFF; color: #081A3A; border: 1px solid #DEE8F2; border-radius: 9px; padding: 12px; selection-background-color: #CFE4FF; selection-color: #081A3A; }}
+    QTextEdit:focus, QPlainTextEdit:focus {{ border: 2px solid #72AEF8; }}
+    QGraphicsView {{ border: 0; border-radius: 9px; background: #E7EEF6; }}
+    QProgressBar {{ min-height: 7px; max-height: 7px; background: #E6EDF4; border: 0; border-radius: 3px; text-align: center; }}
+    QProgressBar::chunk {{ background: #18B879; border-radius: 3px; }}
+    QSplitter::handle {{ background: #F4F8FC; width: 9px; height: 9px; }}
+    QScrollArea {{ background: transparent; border: 0; }}
+    QScrollArea > QWidget > QWidget {{ background: transparent; }}
+    QStackedWidget {{ background: transparent; }}
+    QToolTip {{ color: #FFFFFF; background: #081A3A; border: 1px solid #081A3A; padding: 6px 8px; font: 9pt "Segoe UI"; }}
 """
 
 
@@ -101,7 +183,7 @@ def crop_image(image: Image.Image, box: tuple[int, int, int, int]) -> Image.Imag
     return image.crop((x1, y1, x2, y2))
 
 
-class OCRTextEditor(QPlainTextEdit):
+class OCRTextEditor(QTextEdit):
     """Bidirectional editor for Arabic, English, and mixed OCR output."""
 
     def __init__(self, font_size: int, parent=None) -> None:
@@ -112,12 +194,35 @@ class OCRTextEditor(QPlainTextEdit):
         option.setAlignment(Qt.AlignmentFlag.AlignRight)
         option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         self.document().setDefaultTextOption(option)
-        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         font = QFont("Segoe UI", font_size)
         self.setFont(font)
         self.setTabChangesFocus(False)
         self.setPlaceholderText("النص يظهر هنا بعد الاستخراج. يمكنك تحديده وتعديله مباشرة.")
+
+    def toggle_character_format(self, kind: str) -> None:
+        cursor = self.textCursor()
+        current = cursor.charFormat()
+        fmt = QTextCharFormat()
+        if kind == "bold":
+            fmt.setFontWeight(QFont.Weight.Normal if current.fontWeight() >= QFont.Weight.Bold else QFont.Weight.Bold)
+        elif kind == "italic":
+            fmt.setFontItalic(not current.fontItalic())
+        elif kind == "underline":
+            fmt.setFontUnderline(not current.fontUnderline())
+        cursor.mergeCharFormat(fmt)
+        self.mergeCurrentCharFormat(fmt)
+
+    def make_list(self, numbered: bool) -> None:
+        cursor = self.textCursor()
+        style = (
+            QTextListFormat.Style.ListDecimal
+            if numbered else QTextListFormat.Style.ListDisc
+        )
+        list_format = QTextListFormat()
+        list_format.setStyle(style)
+        cursor.createList(list_format)
 
     def set_ocr_direction(self, languages: list[str]) -> None:
         has_rtl = any(language in {"ara", "fas", "urd", "heb"} for language in languages)
@@ -136,7 +241,7 @@ class OCRTextEditor(QPlainTextEdit):
 
 
 class ImageView(QGraphicsView):
-    def __init__(self, on_selection, parent=None) -> None:
+    def __init__(self, on_selection, on_zoom=None, parent=None) -> None:
         super().__init__(parent)
         self.scene_obj = QGraphicsScene(self)
         self.setScene(self.scene_obj)
@@ -146,10 +251,11 @@ class ImageView(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self.on_selection = on_selection
+        self.on_zoom = on_zoom
         self.image: Image.Image | None = None
         self.pixmap_item = None
         self.rect_item: QGraphicsRectItem | None = None
-        self.handle_items: dict[str, QGraphicsRectItem] = {}
+        self.handle_items: dict[str, QGraphicsEllipseItem] = {}
         self.overlay_items: list[QGraphicsRectItem] = []
         self.start_point: QPointF | None = None
         self.selection: tuple[int, int, int, int] | None = None
@@ -185,6 +291,28 @@ class ImageView(QGraphicsView):
         scale = max(0.03, min(1.0, (self.viewport().width() - 18) / self.image.width))
         self.scale(scale, scale)
         self.fit_mode = True
+        if self.on_zoom:
+            self.on_zoom(self.zoom_percent())
+
+    def fit_view(self) -> None:
+        if not self.image:
+            return
+        self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self.fit_mode = False
+        self._refresh_selection_items()
+        if self.on_zoom:
+            self.on_zoom(self.zoom_percent())
+
+    def set_zoom(self, percent: int) -> None:
+        if not self.image:
+            return
+        target = max(4, min(300, percent)) / 100
+        self.resetTransform()
+        self.scale(target, target)
+        self.fit_mode = False
+        self._refresh_selection_items()
+        if self.on_zoom:
+            self.on_zoom(self.zoom_percent())
 
     def zoom(self, factor: float) -> None:
         if not self.image:
@@ -194,6 +322,8 @@ class ImageView(QGraphicsView):
         self.scale(target / current, target / current)
         self.fit_mode = False
         self._refresh_selection_items()
+        if self.on_zoom:
+            self.on_zoom(self.zoom_percent())
 
     def zoom_percent(self) -> int:
         return round(self.transform().m11() * 100)
@@ -238,7 +368,7 @@ class ImageView(QGraphicsView):
         if not self.overlay_items:
             for region in regions:
                 item = self.scene_obj.addRect(
-                    region, QPen(Qt.PenStyle.NoPen), QBrush(QColor(15, 35, 60, 55))
+                    region, QPen(Qt.PenStyle.NoPen), QBrush(QColor(15, 35, 60, 32))
                 )
                 item.setZValue(1)
                 self.overlay_items.append(item)
@@ -255,15 +385,17 @@ class ImageView(QGraphicsView):
         rect.setBottom(max(rect.top() + 8, min(self.image.height, rect.bottom())))
         self.selection = (round(rect.left()), round(rect.top()), round(rect.right()), round(rect.bottom()))
         if not self.rect_item:
-            pen = QPen(QColor("#1769c2"), 2)
+            pen = QPen(QColor(BLUE), 2)
             pen.setCosmetic(True)
             self.rect_item = self.scene_obj.addRect(rect, pen)
             self.rect_item.setZValue(2)
         if not self.handle_items:
             for name in self._handle_positions(rect):
-                handle = self.scene_obj.addRect(QRectF(0, 0, 10, 10),
-                                                QPen(QColor("#ffffff"), 1),
-                                                QBrush(QColor("#1769c2")))
+                handle = self.scene_obj.addEllipse(
+                    QRectF(0, 0, 10, 10),
+                    QPen(QColor("#ffffff"), 1),
+                    QBrush(QColor(BLUE)),
+                )
                 handle.setZValue(3)
                 self.handle_items[name] = handle
         self._refresh_selection_items()
@@ -318,7 +450,7 @@ class ImageView(QGraphicsView):
                 self.selection_mode = False
                 self.setCursor(Qt.CursorShape.ArrowCursor)
                 if not self.rect_item:
-                    pen = QPen(QColor("#1769c2"), 2)
+                    pen = QPen(QColor(BLUE), 2)
                     pen.setCosmetic(True)
                     self.rect_item = self.scene_obj.addRect(QRectF(point, point), pen)
                     self.rect_item.setZValue(2)
@@ -442,8 +574,8 @@ class OCRWindow(QMainWindow):
         icon_path = application_icon()
         if icon_path.is_file():
             self.setWindowIcon(QIcon(str(icon_path)))
-        self.resize(1320, 840)
-        self.setMinimumSize(980, 620)
+        self.resize(1400, 900)
+        self.setMinimumSize(1100, 700)
         self.path: Path | None = None
         self.document: pymupdf.Document | None = None
         self.page_index = 0
@@ -452,8 +584,12 @@ class OCRWindow(QMainWindow):
         self.events: queue.Queue = queue.Queue()
         self.busy = False
         self.cancel_event: threading.Event | None = None
+        self.ocr_started_at: float | None = None
+        self.last_processing_seconds = 0.0
         self.tesseract_command = locate_tesseract()
         self.available_languages = installed_languages(self.tesseract_command)
+        self.preferences = GlyphSnapSettings()
+        self.history_store = HistoryStore()
         self.screen_selector: ScreenRegionSelector | None = None
         self.setAcceptDrops(True)
         self._build_ui()
@@ -467,6 +603,10 @@ class OCRWindow(QMainWindow):
         if not self.global_hotkey_registered:
             self.capture_shortcut = QShortcut(QKeySequence("Ctrl+Shift+O"), self)
             self.capture_shortcut.activated.connect(self.start_screen_capture)
+        self.extract_selection_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self)
+        self.extract_selection_shortcut.activated.connect(self.extract_selection)
+        self.extract_page_shortcut = QShortcut(QKeySequence("Alt+Return"), self)
+        self.extract_page_shortcut.activated.connect(self.extract_current)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll_events)
         self.timer.start(100)
@@ -477,183 +617,949 @@ class OCRWindow(QMainWindow):
                 f"يبقى زر التقاط الشاشة متاحًا. (Windows error {self.global_hotkey.error_code})"
             )
 
-    def _button(self, label: str, action, primary=False) -> QPushButton:
+    def _button(
+        self,
+        label: str,
+        action,
+        primary: bool = False,
+        tooltip: str | None = None,
+        object_name: str | None = None,
+    ) -> QPushButton:
         button = QPushButton(label)
         button.clicked.connect(action)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         if primary:
             button.setObjectName("primary")
+        elif object_name:
+            button.setObjectName(object_name)
+        if tooltip:
+            button.setToolTip(tooltip)
         return button
+
+    @staticmethod
+    def _set_icon(button: QPushButton, name: str, size: int = 18) -> QPushButton:
+        path = asset_icon(name)
+        if path.is_file():
+            button.setIcon(QIcon(str(path)))
+            button.setIconSize(QSize(size, size))
+        return button
+
+    @staticmethod
+    def _icon_label(name: str, size: int) -> QLabel:
+        return OCRWindow._image_label(name, size, size)
+
+    @staticmethod
+    def _image_label(name: str, width: int, height: int) -> QLabel:
+        label = QLabel()
+        path = asset_icon(name)
+        if path.is_file():
+            label.setPixmap(QPixmap(str(path)).scaled(
+                width,
+                height,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
+        label.setFixedSize(width, height)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        return label
+
+    @staticmethod
+    def _section_text(title: str, helper: str | None = None) -> QWidget:
+        wrapper = QWidget()
+        wrapper.setObjectName("sectionText")
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        title_label = QLabel(title)
+        title_label.setObjectName("sectionTitle")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(title_label)
+        if helper:
+            helper_label = QLabel(helper)
+            helper_label.setObjectName("helper")
+            helper_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            layout.addWidget(helper_label)
+        return wrapper
 
     def _build_ui(self) -> None:
         root = QWidget()
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(16, 14, 16, 12)
-        outer.setSpacing(9)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        header = QFrame()
+        header.setObjectName("appHeader")
+        header.setFixedHeight(86)
+        header_row = QHBoxLayout(header)
+        header_row.setContentsMargins(24, 14, 24, 12)
+        header_row.setSpacing(14)
+        app_icon = QLabel()
+        icon_path = logo_path()
+        if icon_path.is_file():
+            app_icon.setPixmap(QPixmap(str(icon_path)).scaled(
+                42, 42, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
+        app_icon.setFixedSize(44, 44)
+        header_row.addWidget(app_icon)
+        brand = QVBoxLayout()
+        brand.setSpacing(1)
+        brand_title = QHBoxLayout()
+        brand_title.setSpacing(8)
         title = QLabel(TITLE)
         title.setObjectName("title")
-        title.setAlignment(Qt.AlignmentFlag.AlignRight)
-        outer.addWidget(title)
-        subtitle = QLabel("OCR عربي وإنجليزي للصور وPDF وأي جزء من الشاشة — محلي وبدون رفع الملفات.")
-        subtitle.setObjectName("muted")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignRight)
-        outer.addWidget(subtitle)
+        brand_title.addWidget(title)
+        badge = self._image_label("ocr_badge", 43, 25)
+        badge.setAccessibleName("OCR")
+        brand_title.addWidget(badge)
+        brand_title.addStretch(1)
+        brand.addLayout(brand_title)
+        subtitle = QLabel("Extract text from images, PDFs and your screen")
+        subtitle.setObjectName("subtitle")
+        brand.addWidget(subtitle)
+        header_row.addLayout(brand)
+        header_row.addStretch(1)
+        settings_header = self._button("", lambda: self._navigate("settings"), tooltip="Open OCR settings.", object_name="ghost")
+        self._set_icon(settings_header, "settings", 22)
+        settings_header.setFixedWidth(42)
+        settings_header.setAccessibleName("Settings")
+        header_row.addWidget(settings_header)
+        help_header = self._button("", lambda: self._navigate("help"), tooltip="Open shortcuts and usage guide.", object_name="ghost")
+        self._set_icon(help_header, "help", 22)
+        help_header.setFixedWidth(42)
+        help_header.setAccessibleName("Help")
+        header_row.addWidget(help_header)
+        outer.addWidget(header)
 
-        self.empty_state = QLabel(
-            "اسحب ملف PDF أو صورة هنا\n\n"
-            "حوّل الصور والمستندات إلى نص قابل للتحرير\n"
-            "PDF • PNG • JPG • WEBP • BMP • TIFF"
-        )
-        self.empty_state.setObjectName("emptyState")
-        self.empty_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        body = QHBoxLayout()
+        body.setContentsMargins(16, 0, 16, 16)
+        body.setSpacing(8)
+        sidebar = self._build_sidebar()
+        body.addWidget(sidebar)
 
-        file_row = QHBoxLayout()
-        self.open_btn = self._button("فتح ملف أو صورة", self.open_file, True)
-        file_row.addWidget(self.open_btn)
-        self.screen_btn = self._button("التقاط نص من الشاشة  Ctrl+Shift+O", self.start_screen_capture)
-        file_row.addWidget(self.screen_btn)
-        self.file_label = QLabel("لم يُفتح ملف بعد")
-        file_row.addWidget(self.file_label, 1)
-        file_row.addWidget(QLabel("اللغة"))
-        self.language_box = QComboBox()
-        self.language_box.setMaximumWidth(220)
-        self._populate_languages()
-        self.language_box.currentIndexChanged.connect(self._language_changed)
-        file_row.addWidget(self.language_box)
-        self.preprocess_box = QCheckBox("تحسين تلقائي")
-        self.preprocess_box.setChecked(True)
-        self.preprocess_box.setToolTip("تصحيح الميل، إزالة الضوضاء، تحسين التباين، والتكبير قبل OCR")
-        file_row.addWidget(self.preprocess_box)
-        file_row.addWidget(QLabel("دقة PDF"))
-        self.dpi_box = QComboBox()
-        self.dpi_box.addItems(["180", "240", "300", "360", "420"])
-        self.dpi_box.setCurrentText("240")
-        self.dpi_box.currentTextChanged.connect(self._dpi_changed)
-        file_row.addWidget(self.dpi_box)
-        outer.addLayout(file_row)
+        workspace = QWidget()
+        self.home_page = workspace
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(0, 12, 0, 0)
+        workspace_layout.setSpacing(10)
+        top_cards = QHBoxLayout()
+        top_cards.setSpacing(10)
+        top_cards.addWidget(self._build_source_card(), 55)
+        top_cards.addWidget(self._build_settings_card(), 45)
+        workspace_layout.addLayout(top_cards)
 
-        action_row = QHBoxLayout()
-        self.prev_btn = self._button("السابق", lambda: self._go_page(-1))
-        self.next_btn = self._button("التالي", lambda: self._go_page(1))
-        self.page_input = QLineEdit()
-        self.page_input.setFixedWidth(58)
-        self.page_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.page_input.setPlaceholderText("صفحة")
-        self.page_input.returnPressed.connect(self._jump_to_page)
-        self.page_label = QLabel("من 0")
-        self.full_btn = self._button("استخراج الصفحة الحالية", self.extract_current, True)
-        self.all_btn = self._button("استخراج جميع صفحات PDF", self.extract_all)
-        self.cancel_btn = self._button("إيقاف الاستخراج", self.cancel_ocr)
-        self.select_btn = self._button("بدء تحديد منطقة", self.image_view_start_selection)
-        self.crop_btn = self._button("استخراج نص المنطقة", self.extract_selection)
-        self.clear_btn = self._button("مسح التحديد", self.image_view_clear)
-        for widget in (self.prev_btn, self.page_input, self.next_btn, self.page_label, self.full_btn,
-                       self.select_btn,
-                       self.all_btn, self.cancel_btn, self.crop_btn, self.clear_btn):
-            action_row.addWidget(widget)
-        action_row.addStretch(1)
-        outer.addLayout(action_row)
-        outer.addWidget(self.empty_state, 1)
+        self.empty_state = self._build_empty_state()
+        workspace_layout.addWidget(self.empty_state, 1)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.content_splitter = splitter
-        outer.addWidget(splitter, 1)
-        image_panel = QFrame()
-        image_panel.setObjectName("panel")
-        image_layout = QVBoxLayout(image_panel)
-        image_head = QHBoxLayout()
-        self.fit_btn = self._button("ملاءمة العرض", lambda: self.image_view.fit_width())
-        self.minus_btn = self._button("تصغير", lambda: self.image_view.zoom(1 / 1.2))
-        self.plus_btn = self._button("تكبير", lambda: self.image_view.zoom(1.2))
-        image_head.addWidget(self.fit_btn)
-        image_head.addWidget(self.minus_btn)
-        image_head.addWidget(self.plus_btn)
-        self.zoom_label = QLabel("100%")
-        image_head.addWidget(self.zoom_label)
-        image_head.addStretch(1)
-        image_head.addWidget(QLabel("معاينة الصفحة / الصورة"))
-        image_layout.addLayout(image_head)
-        self.image_view = ImageView(self._selection_changed)
-        image_layout.addWidget(self.image_view, 1)
-        splitter.addWidget(image_panel)
-
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self._build_preview_panel())
         right = QSplitter(Qt.Orientation.Vertical)
         self.right_splitter = right
+        right.setChildrenCollapsible(False)
+        right.addWidget(self._build_text_panel())
+        self.region_panel = self._build_region_panel()
+        right.addWidget(self.region_panel)
+        self.region_panel.setMaximumHeight(0)
         splitter.addWidget(right)
-        main_panel = QFrame()
-        main_panel.setObjectName("panel")
-        main_layout = QVBoxLayout(main_panel)
-        main_head = QHBoxLayout()
-        main_head.addWidget(self._button("نسخ النص", lambda: self.copy_field(self.editor)))
-        main_head.addStretch(1)
-        main_head.addWidget(QLabel("النص المستخرج — عدّله مباشرة"))
-        main_layout.addLayout(main_head)
-        self.editor = OCRTextEditor(12)
-        self.editor.textChanged.connect(self._mark_dirty)
-        main_layout.addWidget(self.editor, 1)
-        right.addWidget(main_panel)
+        splitter.setStretchFactor(0, 56)
+        splitter.setStretchFactor(1, 44)
+        splitter.setSizes([720, 560])
+        right.setSizes([680, 0])
+        workspace_layout.addWidget(splitter, 1)
 
-        region_panel = QFrame()
-        region_panel.setObjectName("regionPanel")
-        region_layout = QVBoxLayout(region_panel)
-        region_head = QHBoxLayout()
-        region_head.addWidget(self._button("نسخ نتيجة المنطقة", lambda: self.copy_field(self.region_editor)))
-        region_head.addStretch(1)
-        region_head.addWidget(QLabel("نتيجة الجزء المحدد — اسحب الفاصل لتغيير الحجم"))
-        region_layout.addLayout(region_head)
-        self.region_editor = OCRTextEditor(11)
-        self.region_editor.textChanged.connect(self._update_buttons)
-        region_layout.addWidget(self.region_editor, 1)
-        hint = QLabel("حدد منطقة من الصورة، راجع النتيجة، ثم استبدل التحديد أو أدرج النص عند المؤشر.")
-        hint.setObjectName("muted")
-        hint.setAlignment(Qt.AlignmentFlag.AlignRight)
-        region_layout.addWidget(hint)
-        self.replace_btn = self._button("إدراج النتيجة في النص", self.replace_text)
-        region_layout.addWidget(self.replace_btn, alignment=Qt.AlignmentFlag.AlignRight)
-        right.addWidget(region_panel)
-        right.setSizes([430, 230])
-        splitter.setSizes([620, 650])
+        workspace_layout.addWidget(self._build_status_card())
+        self.pages = QStackedWidget()
+        self.pages.addWidget(workspace)
+        self.page_indices = {"home": 0}
+        for name, page in (
+            ("history", self._build_history_page()),
+            ("settings", self._build_settings_page()),
+            ("help", self._build_help_page()),
+        ):
+            self.page_indices[name] = self.pages.addWidget(page)
+        body.addWidget(self.pages, 1)
+        outer.addLayout(body, 1)
 
-        footer = QHBoxLayout()
-        self.progress = QProgressBar()
-        self.progress.setFixedWidth(120)
-        self.progress.setRange(0, 1)
-        self.progress.setValue(0)
-        footer.addWidget(self.progress)
-        self.status_label = QLabel("جاهز — عجلة الماوس لتمرير الصورة، وCtrl+العجلة لتكبيرها.")
-        self.status_label.setObjectName("muted")
-        footer.addWidget(self.status_label, 1)
-        self.save_btn = self._button("تصدير النص TXT", self.save_text, True)
-        footer.addWidget(self.save_btn)
-        outer.addLayout(footer)
         self.empty_state.setVisible(True)
         self.content_splitter.setVisible(False)
-        # Keep the action row stable while OCR is running; only its enabled
-        # state changes so no temporary button appears or disappears.
-        self.cancel_btn.setVisible(True)
+        self.cancel_btn.setVisible(False)
+        self._load_preferences()
         self._language_changed(self.language_box.currentIndex())
+        self._navigate("home")
+
+    def _build_sidebar(self) -> QFrame:
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(198)
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(14, 20, 14, 14)
+        layout.setSpacing(7)
+        entries = [
+            ("home", "Home\nExtract text easily", "home"),
+            ("history", "History\nRecent files", "history"),
+            ("settings", "Settings\nOCR & Preferences", "settings"),
+            ("help", "Help\nShortcuts & Guide", "help"),
+        ]
+        self.nav_buttons: dict[str, QPushButton] = {}
+        for name, label, icon in entries:
+            button = self._button(label, lambda _checked=False, page=name: self._navigate(page), object_name="navItem")
+            self._set_icon(button, icon, 23)
+            button.setProperty("selected", name == "home")
+            button.setAccessibleName(label.splitlines()[0])
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            layout.addWidget(button)
+            self.nav_buttons[name] = button
+        layout.addStretch(1)
+        hotkey = QFrame()
+        hotkey.setObjectName("hotkeyCard")
+        hotkey_layout = QVBoxLayout(hotkey)
+        hotkey_layout.setContentsMargins(14, 13, 14, 12)
+        hotkey_layout.setSpacing(7)
+        hot_title = QLabel("Global Hotkey")
+        hot_title.setObjectName("sectionTitle")
+        hotkey_layout.addWidget(hot_title)
+        keys = QLabel("  Ctrl  +  Shift  +  O  ")
+        keys.setObjectName("blueBadge")
+        keys.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hotkey_layout.addWidget(keys)
+        hot_copy = QLabel("Capture any screen region\nfrom anywhere.")
+        hot_copy.setObjectName("smallMeta")
+        hotkey_layout.addWidget(hot_copy)
+        learn = self._button("Learn more", lambda: self._navigate("help"), object_name="ghost")
+        self._set_icon(learn, "help", 15)
+        learn.setMinimumHeight(28)
+        hotkey_layout.addWidget(learn)
+        layout.addWidget(hotkey)
+        return sidebar
+
+    def _build_source_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("surfaceCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(10)
+        title_row = QHBoxLayout()
+        title = QLabel("1. Choose Source")
+        title.setObjectName("sectionTitle")
+        title_row.addWidget(title)
+        title_row.addWidget(self._icon_label("info", 17))
+        title_row.addStretch(1)
+        layout.addLayout(title_row)
+        row = QHBoxLayout()
+        row.setSpacing(9)
+        self.screen_btn = self._button("Screen Capture\nCapture a region or full screen", self.start_screen_capture, tooltip="Capture any screen region — Ctrl + Shift + O", object_name="sourceTile")
+        self._set_icon(self.screen_btn, "screen_capture", 27)
+        self.screen_btn.setProperty("selected", True)
+        row.addWidget(self.screen_btn)
+        self.open_btn = self._button("Open Image\nPNG, JPG, BMP, etc.", lambda: self.open_file("image"), tooltip="Open an image — Ctrl + O", object_name="sourceTile")
+        self._set_icon(self.open_btn, "open_image", 27)
+        row.addWidget(self.open_btn)
+        self.pdf_btn = self._button("Open PDF\nExtract text from PDF pages", lambda: self.open_file("pdf"), tooltip="Open a PDF document.", object_name="sourceTile")
+        self._set_icon(self.pdf_btn, "open_pdf", 27)
+        row.addWidget(self.pdf_btn)
+        layout.addLayout(row)
+        self.file_label = QLabel("No source selected")
+        self.file_label.setObjectName("smallMeta")
+        self.file_label.setVisible(False)
+        layout.addWidget(self.file_label)
+        return card
+
+    def _build_settings_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("surfaceCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(9)
+        title_row = QHBoxLayout()
+        title = QLabel("2. OCR Settings")
+        title.setObjectName("sectionTitle")
+        title_row.addWidget(title)
+        title_row.addWidget(self._icon_label("info", 17))
+        title_row.addStretch(1)
+        self.preprocess_box = QCheckBox("Auto enhance")
+        self.preprocess_box.setToolTip("Automatically improve contrast, scale and alignment before OCR.")
+        self.preprocess_box.setVisible(False)
+        title_row.addWidget(self.preprocess_box)
+        layout.addLayout(title_row)
+        controls = QHBoxLayout()
+        controls.setSpacing(16)
+        language_col = QVBoxLayout()
+        language_col.setSpacing(5)
+        language_label = QLabel("Language(s)")
+        language_label.setObjectName("settingLabel")
+        language_col.addWidget(language_label)
+        self.language_box = QComboBox()
+        self.language_box.setToolTip("Choose the languages expected in the document.")
+        self._populate_languages()
+        self.language_box.currentIndexChanged.connect(self._language_changed)
+        language_col.addWidget(self.language_box)
+        controls.addLayout(language_col, 1)
+        dpi_col = QVBoxLayout()
+        dpi_col.setSpacing(5)
+        dpi_label = QLabel("Image DPI (for PDF)")
+        dpi_label.setObjectName("settingLabel")
+        dpi_col.addWidget(dpi_label)
+        self.dpi_box = QComboBox()
+        self.dpi_box.addItems(["180", "240", "300 (Recommended)", "360", "420"])
+        self.dpi_box.setCurrentText("300 (Recommended)")
+        self.dpi_box.setToolTip("Higher PDF DPI can improve OCR, but takes longer to process.")
+        self.dpi_box.currentTextChanged.connect(self._dpi_changed)
+        dpi_col.addWidget(self.dpi_box)
+        controls.addLayout(dpi_col, 1)
+        layout.addLayout(controls)
+        return card
+
+    def _build_empty_state(self) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("emptyState")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(32, 32, 32, 32)
+        layout.addStretch(1)
+        icon = self._icon_label("glyphsnap_logo", 54)
+        layout.addWidget(icon)
+        title = QLabel("ابدأ باختيار مصدر للنص")
+        title.setObjectName("title")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        copy = QLabel("افتح صورة أو PDF، أو التقط جزءًا من الشاشة لبدء استخراج النص.")
+        copy.setObjectName("subtitle")
+        copy.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(copy)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        open_empty = self._button("فتح ملف", lambda: self.open_file(), True)
+        self._set_icon(open_empty, "open_image", 19)
+        actions.addWidget(open_empty)
+        capture_empty = self._button("التقاط من الشاشة", self.start_screen_capture)
+        self._set_icon(capture_empty, "screen_capture", 19)
+        actions.addWidget(capture_empty)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+        formats = QLabel("PDF  •  PNG  •  JPG  •  WEBP  •  BMP  •  TIFF")
+        formats.setObjectName("smallMeta")
+        formats.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(formats)
+        layout.addStretch(1)
+        return frame
+
+    def _icon_button(self, text: str, action, tooltip: str, icon: str | None = None) -> QPushButton:
+        button = self._button(text, action, tooltip=tooltip, object_name="iconButton")
+        if icon:
+            self._set_icon(button, icon, 19)
+        button.setAccessibleName(tooltip.split("—")[0].strip())
+        return button
+
+    def _build_preview_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(9)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        title = QLabel("Image Preview")
+        title.setObjectName("panelTitle")
+        head.addWidget(title)
+        self.source_badge = QLabel("Screen Capture")
+        self.source_badge.setObjectName("blueBadge")
+        head.addWidget(self.source_badge)
+        self.resolution_label = QLabel("— × — px")
+        self.resolution_label.setObjectName("smallMeta")
+        head.addWidget(self.resolution_label)
+        head.addStretch(1)
+        self.minus_btn = self._icon_button("", lambda: self.image_view.zoom(1 / 1.2), "Zoom out — Ctrl + mouse wheel", "zoom_out")
+        head.addWidget(self.minus_btn)
+        self.plus_btn = self._icon_button("", lambda: self.image_view.zoom(1.2), "Zoom in — Ctrl + mouse wheel", "zoom_in")
+        head.addWidget(self.plus_btn)
+        self.fit_btn = self._icon_button("", lambda: self.image_view.fit_width(), "Fit image to the preview width.", "fit_width")
+        head.addWidget(self.fit_btn)
+        self.zoom_box = QComboBox()
+        self.zoom_box.setFixedWidth(78)
+        self.zoom_box.addItems(["50%", "75%", "100%", "125%", "150%", "200%"])
+        self.zoom_box.setCurrentText("100%")
+        self.zoom_box.activated.connect(
+            lambda _index: self.image_view.set_zoom(int(self.zoom_box.currentText()[:-1]))
+        )
+        head.addWidget(self.zoom_box)
+        self.fit_view_btn = self._icon_button("", lambda: self.image_view.fit_view(), "Fit the full image in the preview.", "fit_view")
+        head.addWidget(self.fit_view_btn)
+        layout.addLayout(head)
+
+        self.page_controls = QWidget()
+        page_row = QHBoxLayout(self.page_controls)
+        page_row.setContentsMargins(0, 0, 0, 0)
+        page_row.setSpacing(7)
+        self.prev_btn = self._icon_button("", lambda: self._go_page(-1), "Previous PDF page.", "previous_page")
+        page_row.addWidget(self.prev_btn)
+        self.page_input = QLineEdit()
+        self.page_input.setFixedWidth(48)
+        self.page_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_input.setPlaceholderText("Page")
+        self.page_input.setToolTip("Enter a page number and press Enter.")
+        self.page_input.returnPressed.connect(self._jump_to_page)
+        page_row.addWidget(self.page_input)
+        self.page_label = QLabel("of 0")
+        self.page_label.setObjectName("smallMeta")
+        page_row.addWidget(self.page_label)
+        self.next_btn = self._icon_button("", lambda: self._go_page(1), "Next PDF page.", "next_page")
+        page_row.addWidget(self.next_btn)
+        page_row.addStretch(1)
+        self.all_btn = self._button("Extract Entire PDF", self.extract_all, tooltip="Run OCR on every page in this PDF.")
+        self._set_icon(self.all_btn, "open_pdf", 18)
+        page_row.addWidget(self.all_btn)
+        layout.addWidget(self.page_controls)
+
+        self.image_view = ImageView(self._selection_changed, self._zoom_changed)
+        self.image_view.setToolTip("Drag to select text; use the blue handles to resize the OCR region.")
+        layout.addWidget(self.image_view, 1)
+
+        toolbar = QFrame()
+        toolbar.setObjectName("regionToolbar")
+        toolbar_layout = QVBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(12, 8, 12, 8)
+        toolbar_layout.setSpacing(5)
+        tool_title = QLabel("Selection Tools")
+        tool_title.setObjectName("sectionTitle")
+        toolbar_layout.addWidget(tool_title)
+        tools = QHBoxLayout()
+        tools.setSpacing(8)
+        self.select_btn = self._button("Select Region", self.image_view_start_selection, tooltip="Select a region to extract from the image.", object_name="ghost")
+        self._set_icon(self.select_btn, "select_region", 21)
+        self.select_btn.setMinimumWidth(108)
+        tools.addWidget(self.select_btn)
+        self.full_image_btn = self._button("Full Image", self._select_full_image, tooltip="Select the complete image.", object_name="ghost")
+        self._set_icon(self.full_image_btn, "full_image", 21)
+        self.full_image_btn.setMinimumWidth(96)
+        tools.addWidget(self.full_image_btn)
+        self.clear_btn = self._button("Reset", self.image_view_clear, tooltip="Clear the current image selection.", object_name="ghost")
+        self._set_icon(self.clear_btn, "reset_selection", 21)
+        self.clear_btn.setMinimumWidth(82)
+        tools.addWidget(self.clear_btn)
+        divider = QFrame()
+        divider.setObjectName("separator")
+        tools.addWidget(divider)
+        tools.addStretch(1)
+        self.crop_btn = self._button("Extract Selection", self.extract_selection, True, "Extract text from the selected region — Ctrl + Enter")
+        self._set_icon(self.crop_btn, "extract_selection", 20)
+        crop_col = QVBoxLayout()
+        crop_col.setSpacing(1)
+        crop_col.addWidget(self.crop_btn)
+        crop_shortcut = QLabel("Ctrl + Enter")
+        crop_shortcut.setObjectName("shortcut")
+        crop_shortcut.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        crop_col.addWidget(crop_shortcut)
+        tools.addLayout(crop_col)
+        self.full_btn = self._button("Extract Full Page", self.extract_current, tooltip="Extract text from the full image — Alt + Enter")
+        self._set_icon(self.full_btn, "extract_page", 20)
+        full_col = QVBoxLayout()
+        full_col.setSpacing(1)
+        full_col.addWidget(self.full_btn)
+        full_shortcut = QLabel("Alt + Enter")
+        full_shortcut.setObjectName("shortcut")
+        full_shortcut.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        full_col.addWidget(full_shortcut)
+        tools.addLayout(full_col)
+        self.cancel_btn = self._button("Cancel", self.cancel_ocr, tooltip="Cancel OCR after the current operation finishes.", object_name="danger")
+        self._set_icon(self.cancel_btn, "clear", 17)
+        tools.addWidget(self.cancel_btn)
+        toolbar_layout.addLayout(tools)
+        layout.addWidget(toolbar)
+        return panel
+
+    def _build_text_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(9)
+        head = QHBoxLayout()
+        title = QLabel("Extracted Text")
+        title.setObjectName("panelTitle")
+        head.addWidget(title)
+        self.ready_badge = QLabel("Ready")
+        self.ready_badge.setObjectName("greenBadge")
+        head.addWidget(self.ready_badge)
+        head.addStretch(1)
+        self.word_count_label = QLabel("0 words")
+        self.word_count_label.setObjectName("smallMeta")
+        head.addWidget(self.word_count_label)
+        layout.addLayout(head)
+
+        toolbar = QFrame()
+        toolbar.setObjectName("toolbar")
+        row = QHBoxLayout(toolbar)
+        row.setContentsMargins(7, 5, 7, 5)
+        row.setSpacing(2)
+        self.editor = OCRTextEditor(12)
+        format_actions = [
+            ("bold", lambda: self.editor.toggle_character_format("bold"), "Bold"),
+            ("italic", lambda: self.editor.toggle_character_format("italic"), "Italic"),
+            ("underline", lambda: self.editor.toggle_character_format("underline"), "Underline"),
+            ("bullet_list", lambda: self.editor.make_list(False), "Bulleted list"),
+            ("numbered_list", lambda: self.editor.make_list(True), "Numbered list"),
+            ("undo", self.editor.undo, "Undo"),
+            ("redo", self.editor.redo, "Redo"),
+        ]
+        for icon_name, action, tip in format_actions:
+            button = self._button("", action, tooltip=tip, object_name="toolButton")
+            button.setAccessibleName(tip)
+            self._set_icon(button, icon_name, 19)
+            row.addWidget(button)
+        row.addStretch(1)
+        copy_tool = self._button("", lambda: self.copy_field(self.editor), tooltip="Copy all extracted text.", object_name="toolButton")
+        self._set_icon(copy_tool, "copy", 19)
+        row.addWidget(copy_tool)
+        clear_tool = self._button("Clear", self.editor.clear, tooltip="Clear the extracted text.", object_name="subtle")
+        self._set_icon(clear_tool, "clear", 17)
+        row.addWidget(clear_tool)
+        layout.addWidget(toolbar)
+        self.editor.setToolTip("Editable OCR output with automatic Arabic and English text direction.")
+        self.editor.textChanged.connect(self._mark_dirty)
+        layout.addWidget(self.editor, 1)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(9)
+        copy_button = self._button("Copy Text\nCtrl + C", lambda: self.copy_field(self.editor), True)
+        self._set_icon(copy_button, "copy", 20)
+        actions.addWidget(copy_button, 1)
+        self.save_btn = self._button("Save as TXT", self.save_text, tooltip="Save the extracted text as a TXT file — Ctrl + S")
+        self._set_icon(self.save_btn, "save_txt", 20)
+        actions.addWidget(self.save_btn, 1)
+        save_pdf = self._button("Save as PDF", lambda: None)
+        self._set_icon(save_pdf, "save_pdf", 20)
+        save_pdf.setEnabled(False)
+        save_pdf.setToolTip("PDF export is not available in the current OCR backend.")
+        actions.addWidget(save_pdf, 1)
+        layout.addLayout(actions)
+        return panel
+
+    def _build_region_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("regionPanel")
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(10, 8, 10, 8)
+        title = QLabel("Selection result")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        self.region_editor = OCRTextEditor(11)
+        self.region_editor.setToolTip("Review the selected-region result before inserting it into the main text.")
+        self.region_editor.textChanged.connect(self._update_buttons)
+        layout.addWidget(self.region_editor, 1)
+        self.replace_btn = self._button("Insert in Text", self.replace_text, True, "Insert this result at the current editor cursor.")
+        self._set_icon(self.replace_btn, "add_selection", 18)
+        layout.addWidget(self.replace_btn)
+        return panel
+
+    def _build_status_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("statusCard")
+        card.setMinimumHeight(100)
+        footer = QHBoxLayout(card)
+        footer.setContentsMargins(20, 12, 20, 12)
+        footer.setSpacing(18)
+        success = self._icon_label("success", 38)
+        footer.addWidget(success)
+        status_col = QVBoxLayout()
+        status_col.setSpacing(3)
+        self.status_title = QLabel("Ready for OCR")
+        self.status_title.setStyleSheet("color:#11885B;font:700 11pt 'Segoe UI';")
+        status_col.addWidget(self.status_title)
+        self.status_label = QLabel("Choose a source, then extract a page or selection.")
+        self.status_label.setObjectName("smallMeta")
+        status_col.addWidget(self.status_label)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        self.progress.setToolTip("OCR processing progress.")
+        progress_row = QHBoxLayout()
+        progress_row.setSpacing(10)
+        progress_row.addWidget(self.progress, 1)
+        self.progress_percent = QLabel("0%")
+        self.progress_percent.setObjectName("smallMeta")
+        progress_row.addWidget(self.progress_percent)
+        status_col.addLayout(progress_row)
+        footer.addLayout(status_col, 3)
+        for label, value_widget, icon_name in [
+            ("Detected Language", "language", "language"),
+            ("Processing Time", "time", "processing_time"),
+            ("Selected Area", "area", "selected_area"),
+        ]:
+            sep = QFrame()
+            sep.setObjectName("separator")
+            footer.addWidget(sep)
+            metric_wrapper = QHBoxLayout()
+            metric_wrapper.setSpacing(10)
+            metric_wrapper.addWidget(self._icon_label(icon_name, 32))
+            metric = QVBoxLayout()
+            metric.setSpacing(4)
+            metric_title = QLabel(label)
+            metric_title.setObjectName("metricTitle")
+            metric.addWidget(metric_title)
+            value = QLabel("—")
+            value.setObjectName("metricValue")
+            metric.addWidget(value)
+            if value_widget == "language":
+                self.detected_language_value = value
+            elif value_widget == "time":
+                self.processing_time_value = value
+            else:
+                self.area_value = value
+            metric_wrapper.addLayout(metric)
+            footer.addLayout(metric_wrapper, 1)
+        return card
+
+    def _build_page_shell(self, title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 24, 0, 0)
+        layout.setSpacing(16)
+        heading = QLabel(title)
+        heading.setObjectName("pageTitle")
+        layout.addWidget(heading)
+        description = QLabel(subtitle)
+        description.setObjectName("subtitle")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+        return page, layout
+
+    def _build_history_page(self) -> QWidget:
+        page, layout = self._build_page_shell(
+            "History",
+            "Recent OCR results are stored locally on this computer. Screen images are never retained.",
+        )
+        actions = QHBoxLayout()
+        self.history_count_label = QLabel("0 items")
+        self.history_count_label.setObjectName("smallMeta")
+        actions.addWidget(self.history_count_label)
+        actions.addStretch(1)
+        self.clear_history_btn = self._button(
+            "Clear History", self._clear_history, tooltip="Delete all saved OCR history.", object_name="danger"
+        )
+        self._set_icon(self.clear_history_btn, "clear", 17)
+        actions.addWidget(self.clear_history_btn)
+        layout.addLayout(actions)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        self.history_container = QWidget()
+        self.history_layout = QVBoxLayout(self.history_container)
+        self.history_layout.setContentsMargins(0, 0, 8, 0)
+        self.history_layout.setSpacing(10)
+        self.history_layout.addStretch(1)
+        scroll.setWidget(self.history_container)
+        layout.addWidget(scroll, 1)
+        return page
+
+    def _build_settings_page(self) -> QWidget:
+        page, layout = self._build_page_shell(
+            "Settings",
+            "Choose the defaults GlyphSnap uses for new images, PDFs and screen captures.",
+        )
+        card = QFrame()
+        card.setObjectName("pageCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(22, 20, 22, 20)
+        card_layout.setSpacing(14)
+        title = QLabel("OCR & PDF preferences")
+        title.setObjectName("panelTitle")
+        card_layout.addWidget(title)
+
+        language_label = QLabel("Default language(s)")
+        language_label.setObjectName("settingLabel")
+        card_layout.addWidget(language_label)
+        self.settings_language_box = QComboBox()
+        for index in range(self.language_box.count()):
+            self.settings_language_box.addItem(
+                self.language_box.itemIcon(index),
+                self.language_box.itemText(index),
+                self.language_box.itemData(index),
+            )
+        card_layout.addWidget(self.settings_language_box)
+
+        dpi_label = QLabel("Default PDF rendering DPI")
+        dpi_label.setObjectName("settingLabel")
+        card_layout.addWidget(dpi_label)
+        self.settings_dpi_box = QComboBox()
+        self.settings_dpi_box.addItems(["180", "240", "300 (Recommended)", "360", "420"])
+        card_layout.addWidget(self.settings_dpi_box)
+
+        self.settings_preprocess_box = QCheckBox("Automatically enhance scans before OCR")
+        self.settings_preprocess_box.setToolTip(
+            "Improves contrast, alignment and scale before recognition."
+        )
+        card_layout.addWidget(self.settings_preprocess_box)
+
+        privacy = QLabel(
+            "Privacy: OCR stays on this computer. History stores extracted text and source paths, "
+            "but never stores captured screen images."
+        )
+        privacy.setObjectName("smallMeta")
+        privacy.setWordWrap(True)
+        card_layout.addWidget(privacy)
+        layout.addWidget(card)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        reset = self._button("Reset Defaults", self._reset_preferences, object_name="subtle")
+        self._set_icon(reset, "reset_selection", 17)
+        buttons.addWidget(reset)
+        apply_button = self._button("Apply Settings", self._apply_preferences, True)
+        self._set_icon(apply_button, "settings", 18)
+        buttons.addWidget(apply_button)
+        layout.addLayout(buttons)
+        self.settings_feedback = QLabel("")
+        self.settings_feedback.setObjectName("smallMeta")
+        self.settings_feedback.setAlignment(Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(self.settings_feedback)
+        layout.addStretch(1)
+        return page
+
+    def _build_help_page(self) -> QWidget:
+        page, layout = self._build_page_shell(
+            "Help",
+            "Use these shortcuts from the Home workspace. The global capture shortcut works while GlyphSnap is running.",
+        )
+        card = QFrame()
+        card.setObjectName("pageCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(22, 20, 22, 20)
+        card_layout.setSpacing(12)
+        heading = QLabel("Shortcuts & guide")
+        heading.setObjectName("panelTitle")
+        card_layout.addWidget(heading)
+        shortcuts = [
+            ("Ctrl + O", "Open an image or PDF"),
+            ("Ctrl + Shift + O", "Capture a screen region"),
+            ("Ctrl + Enter", "Extract the selected region"),
+            ("Alt + Enter", "Extract the full page"),
+            ("Ctrl + S", "Save extracted text as TXT"),
+            ("Ctrl + mouse wheel", "Zoom the image preview"),
+        ]
+        for key, description in shortcuts:
+            row = QHBoxLayout()
+            key_label = QLabel(key)
+            key_label.setObjectName("blueBadge")
+            key_label.setMinimumWidth(145)
+            key_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            row.addWidget(key_label)
+            row.addWidget(QLabel(description), 1)
+            card_layout.addLayout(row)
+        layout.addWidget(card)
+        layout.addStretch(1)
+        return page
+
+    def _navigate(self, page: str) -> None:
+        if not hasattr(self, "pages") or page not in self.page_indices:
+            return
+        if page == "history":
+            self._refresh_history()
+        elif page == "settings":
+            self._sync_settings_page()
+        self.pages.setCurrentIndex(self.page_indices[page])
+        for name, button in self.nav_buttons.items():
+            button.setProperty("selected", name == page)
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+    def _refresh_history(self) -> None:
+        while self.history_layout.count():
+            item = self.history_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        records = self.history_store.load()
+        self.history_count_label.setText(f"{len(records)} item{'s' if len(records) != 1 else ''}")
+        self.clear_history_btn.setEnabled(bool(records))
+        if not records:
+            empty = QFrame()
+            empty.setObjectName("pageCard")
+            empty_layout = QVBoxLayout(empty)
+            empty_layout.setContentsMargins(28, 42, 28, 42)
+            empty_layout.addWidget(self._icon_label("history", 42), 0, Qt.AlignmentFlag.AlignHCenter)
+            title = QLabel("No OCR history yet")
+            title.setObjectName("panelTitle")
+            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_layout.addWidget(title)
+            copy = QLabel("Completed OCR results will appear here.")
+            copy.setObjectName("smallMeta")
+            copy.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_layout.addWidget(copy)
+            self.history_layout.addWidget(empty)
+            self.history_layout.addStretch(1)
+            return
+        for record in records:
+            self.history_layout.addWidget(self._history_row(record))
+        self.history_layout.addStretch(1)
+
+    def _history_row(self, record: HistoryRecord) -> QFrame:
+        row = QFrame()
+        row.setObjectName("historyCard")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(14)
+        source_icon = {
+            "screen": "screen_capture", "pdf": "open_pdf", "image": "open_image"
+        }.get(record.source_type, "text_file")
+        layout.addWidget(self._icon_label(source_icon, 30))
+        details = QVBoxLayout()
+        details.setSpacing(4)
+        title = QLabel(record.source_name or "OCR result")
+        title.setObjectName("panelTitle")
+        details.addWidget(title)
+        try:
+            created = datetime.fromisoformat(record.created_at).astimezone().strftime("%b %d, %Y  %H:%M")
+        except ValueError:
+            created = record.created_at
+        language = " + ".join(code.upper() for code in record.languages) or "Unknown language"
+        meta = QLabel(
+            f"{created}  •  {language}  •  {record.word_count} words  •  "
+            f"{record.processing_seconds:.1f} seconds"
+        )
+        meta.setObjectName("smallMeta")
+        details.addWidget(meta)
+        preview = " ".join(record.text.split())
+        if len(preview) > 150:
+            preview = preview[:147] + "…"
+        preview_label = QLabel(preview or "No text was detected.")
+        preview_label.setWordWrap(True)
+        details.addWidget(preview_label)
+        layout.addLayout(details, 1)
+        copy_button = self._button("Copy", lambda _checked=False, text=record.text: self._copy_text(text), object_name="subtle")
+        self._set_icon(copy_button, "copy", 17)
+        layout.addWidget(copy_button)
+        open_button = self._button("Open", lambda _checked=False, item=record: self._open_history(item), object_name="subtle")
+        self._set_icon(open_button, "open_image", 17)
+        source_exists = bool(record.source_path and Path(record.source_path).is_file())
+        open_button.setEnabled(source_exists)
+        if not source_exists:
+            open_button.setToolTip("The source file is unavailable. Copy the saved text instead.")
+        layout.addWidget(open_button)
+        delete_button = self._button("Delete", lambda _checked=False, item=record: self._delete_history(item), object_name="danger")
+        self._set_icon(delete_button, "clear", 17)
+        layout.addWidget(delete_button)
+        return row
+
+    def _copy_text(self, text: str) -> None:
+        if text:
+            QApplication.clipboard().setText(text)
+            self._status("Copied saved OCR text to the clipboard.")
+
+    def _open_history(self, record: HistoryRecord) -> None:
+        path = Path(record.source_path)
+        if not path.is_file():
+            return
+        self.load_file(path)
+        self.editor.setPlainText(record.text)
+        self.text_by_page[0] = record.text
+        self._navigate("home")
+        self._status("Reopened the source and restored its saved OCR text.")
+
+    def _delete_history(self, record: HistoryRecord) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Delete history item",
+            f"Delete the saved OCR result for {record.source_name}?",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.history_store.delete(record.id)
+            self._refresh_history()
+
+    def _clear_history(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Clear OCR history",
+            "Delete all locally saved OCR history? This cannot be undone.",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.history_store.clear()
+            self._refresh_history()
+
+    def _find_language_index(self, box: QComboBox, languages: list[str]) -> int:
+        for index in range(box.count()):
+            if list(box.itemData(index) or []) == languages:
+                return index
+        return 0
+
+    def _load_preferences(self) -> None:
+        languages = self.preferences.languages()
+        self.language_box.setCurrentIndex(self._find_language_index(self.language_box, languages))
+        dpi_text = str(self.preferences.pdf_dpi())
+        index = self.dpi_box.findText(dpi_text, Qt.MatchFlag.MatchStartsWith)
+        self.dpi_box.setCurrentIndex(max(0, index))
+        self.preprocess_box.setChecked(self.preferences.preprocess())
+        self._sync_settings_page()
+
+    def _sync_settings_page(self) -> None:
+        if not hasattr(self, "settings_language_box"):
+            return
+        self.settings_language_box.setCurrentIndex(
+            self._find_language_index(self.settings_language_box, self.selected_languages())
+        )
+        dpi_index = self.settings_dpi_box.findText(
+            str(self._pdf_dpi()), Qt.MatchFlag.MatchStartsWith
+        )
+        self.settings_dpi_box.setCurrentIndex(max(0, dpi_index))
+        self.settings_preprocess_box.setChecked(self.preprocess_box.isChecked())
+
+    def _apply_preferences(self) -> None:
+        languages = list(self.settings_language_box.currentData() or [])
+        self.language_box.setCurrentIndex(self._find_language_index(self.language_box, languages))
+        dpi = int(self.settings_dpi_box.currentText().split()[0])
+        dpi_index = self.dpi_box.findText(str(dpi), Qt.MatchFlag.MatchStartsWith)
+        self.dpi_box.setCurrentIndex(max(0, dpi_index))
+        self.preprocess_box.setChecked(self.settings_preprocess_box.isChecked())
+        self.preferences.set_languages(languages)
+        self.preferences.set_pdf_dpi(dpi)
+        self.preferences.set_preprocess(self.preprocess_box.isChecked())
+        self.preferences.sync()
+        self.settings_feedback.setText("Settings saved.")
+        self._status("OCR settings updated.")
+
+    def _reset_preferences(self) -> None:
+        self.preferences.reset()
+        self._load_preferences()
+        self.settings_feedback.setText("Default settings restored.")
 
     def _populate_languages(self) -> None:
         installed = set(self.available_languages)
+        language_icon = QIcon(str(asset_icon("language")))
         presets = [
-            ("تلقائي — العربية + English", ["ara", "eng"]),
-            ("العربية — Arabic", ["ara"]),
-            ("English — الإنجليزية", ["eng"]),
+            ("Arabic + English (ara+eng)", ["ara", "eng"]),
+            ("Arabic (ara)", ["ara"]),
+            ("English (eng)", ["eng"]),
         ]
         for label, languages in presets:
             if all(language in installed for language in languages):
-                self.language_box.addItem(label, languages)
+                self.language_box.addItem(language_icon, label, languages)
         used = {language for _, languages in presets for language in languages}
         for language, label in LANGUAGE_LABELS.items():
             if language in installed and language not in used:
-                self.language_box.addItem(label, [language])
+                self.language_box.addItem(language_icon, label, [language])
                 used.add(language)
         for language in sorted(installed):
             if language in used or language == "osd":
                 continue
-            self.language_box.addItem(LANGUAGE_LABELS.get(language, language), [language])
+            self.language_box.addItem(
+                language_icon, LANGUAGE_LABELS.get(language, language), [language]
+            )
         if self.language_box.count() == 0:
-            self.language_box.addItem("لا توجد لغات OCR مثبتة", [])
+            self.language_box.addItem(language_icon, "لا توجد لغات OCR مثبتة", [])
+
+    def _pdf_dpi(self) -> int:
+        return int(self.dpi_box.currentText().split()[0])
+
+    def _show_help(self) -> None:
+        self._navigate("help")
+
+    def _select_full_image(self) -> None:
+        if self.image is None:
+            return
+        self.image_view._set_selection(QRectF(0, 0, self.image.width, self.image.height))
+        self._status("The full image is selected. You can extract it now.")
 
     def selected_languages(self) -> list[str]:
         value = self.language_box.currentData()
@@ -663,16 +1569,36 @@ class OCRWindow(QMainWindow):
         languages = self.selected_languages()
         self.editor.set_ocr_direction(languages)
         self.region_editor.set_ocr_direction(languages)
+        if hasattr(self, "detected_language_value"):
+            labels = {"ara": "Arabic", "eng": "English"}
+            self.detected_language_value.setText(
+                " + ".join(labels.get(language, language.upper()) for language in languages) or "—"
+            )
         if languages:
-            self._status("لغة OCR: " + " + ".join(languages))
+            self._status("OCR language set to " + " + ".join(languages) + ".")
+            self.preferences.set_languages(languages)
+            self.preferences.sync()
 
     def _status(self, text: str) -> None:
         self.status_label.setText(text)
+
+    def _set_source_selection(self, source: str) -> None:
+        for button, name in (
+            (self.screen_btn, "screen"),
+            (self.open_btn, "image"),
+            (self.pdf_btn, "pdf"),
+        ):
+            button.setProperty("selected", name == source)
+            button.style().unpolish(button)
+            button.style().polish(button)
 
     def _mark_dirty(self) -> None:
         if self.path is not None and not self.busy:
             self.file_label.setText(f"{self.path.name}  •  غير محفوظ")
         if hasattr(self, "save_btn"):
+            if hasattr(self, "word_count_label"):
+                words = len(self.editor.toPlainText().split())
+                self.word_count_label.setText(f"{words} word{'s' if words != 1 else ''}")
             self._update_buttons()
 
     def image_view_start_selection(self) -> None:
@@ -716,19 +1642,31 @@ class OCRWindow(QMainWindow):
         event.acceptProposedAction()
 
     def _selection_changed(self, box) -> None:
-        self.zoom_label.setText(f"{self.image_view.zoom_percent()}%")
         self._update_buttons()
         if box:
-            self._status(f"المساحة المحددة: {box[2]-box[0]} × {box[3]-box[1]} بكسل. اضغط استخراج الجزء المحدد.")
+            width, height = box[2] - box[0], box[3] - box[1]
+            self.area_value.setText(f"{width} × {height} px")
+            self._status("A region is selected. Extract it or adjust the blue handles.")
+        elif hasattr(self, "area_value"):
+            self.area_value.setText("—")
+
+    def _zoom_changed(self, percent: int) -> None:
+        if hasattr(self, "zoom_box"):
+            value = f"{percent}%"
+            if self.zoom_box.findText(value) < 0:
+                self.zoom_box.addItem(value)
+            self.zoom_box.setCurrentText(value)
 
     def _update_buttons(self) -> None:
         has_image = self.image is not None
         count = len(self.document) if self.document is not None else (1 if has_image else 0)
-        self.page_label.setText(f"من {count}" if count else "من 0")
+        self.page_controls.setVisible(self.document is not None)
+        self.page_label.setText(f"of {count}" if count else "of 0")
         if count and self.page_input.text() != str(self.page_index + 1):
             self.page_input.setText(str(self.page_index + 1))
         self.open_btn.setEnabled(not self.busy)
         self.screen_btn.setEnabled(not self.busy)
+        self.pdf_btn.setEnabled(not self.busy)
         self.language_box.setEnabled(not self.busy)
         self.preprocess_box.setEnabled(not self.busy)
         self.dpi_box.setEnabled(not self.busy)
@@ -737,8 +1675,9 @@ class OCRWindow(QMainWindow):
         self.next_btn.setEnabled(bool(self.document and self.page_index+1 < count and not self.busy))
         self.full_btn.setEnabled(has_image and not self.busy)
         self.select_btn.setEnabled(has_image and not self.busy)
+        self.full_image_btn.setEnabled(has_image and not self.busy)
         self.all_btn.setEnabled(self.document is not None and not self.busy)
-        self.cancel_btn.setVisible(True)
+        self.cancel_btn.setVisible(self.busy)
         self.cancel_btn.setEnabled(self.busy)
         self.crop_btn.setEnabled(bool(self.image_view.selection and not self.busy))
         self.clear_btn.setEnabled(bool(self.image_view.selection and not self.busy))
@@ -746,12 +1685,18 @@ class OCRWindow(QMainWindow):
         has_text = bool(self.editor.toPlainText().strip() or self.text_by_page)
         self.save_btn.setEnabled(self.path is not None and has_text and not self.busy)
 
-    def open_file(self) -> None:
+    def open_file(self, source: str | None = None) -> None:
         if self.busy:
             return
+        if source == "image":
+            file_filter = "Images (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff);;All files (*)"
+        elif source == "pdf":
+            file_filter = "PDF documents (*.pdf);;All files (*)"
+        else:
+            file_filter = "PDF and images (*.pdf *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff);;All files (*)"
         filename, _ = QFileDialog.getOpenFileName(
             self, "اختر صورة أو مستند PDF", "",
-            "PDF والصور (*.pdf *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff);;كل الملفات (*)")
+            file_filter)
         if filename:
             self.load_file(Path(filename))
 
@@ -762,7 +1707,7 @@ class OCRWindow(QMainWindow):
                 if document.needs_pass or len(document) == 0:
                     document.close()
                     raise ValueError("ملف PDF محمي بكلمة مرور أو فارغ.")
-                image = render_pdf_page(document[0], int(self.dpi_box.currentText()))
+                image = render_pdf_page(document[0], self._pdf_dpi())
             else:
                 document = None
                 with Image.open(path) as opened:
@@ -780,6 +1725,10 @@ class OCRWindow(QMainWindow):
         self.region_editor.setPlainText("")
         self.image = image
         self.image_view.set_image(image)
+        self.resolution_label.setText(f"{image.width} × {image.height} px")
+        is_pdf = path.suffix.lower() == ".pdf"
+        self.source_badge.setText("PDF" if is_pdf else "Open Image")
+        self._set_source_selection("pdf" if is_pdf else "image")
         self.file_label.setText(path.name)
         self.empty_state.setVisible(False)
         self.content_splitter.setVisible(True)
@@ -799,25 +1748,29 @@ class OCRWindow(QMainWindow):
             return
         self._remember_page()
         try:
-            image = render_pdf_page(self.document[target], int(self.dpi_box.currentText()))
+            image = render_pdf_page(self.document[target], self._pdf_dpi())
         except Exception as exc:
             QMessageBox.critical(self, "تعذر عرض الصفحة", str(exc))
             return
         self.page_index = target
         self.image = image
         self.image_view.set_image(image)
+        self.resolution_label.setText(f"{image.width} × {image.height} px")
         self.editor.setPlainText(self.text_by_page.get(target, ""))
         self.region_editor.setPlainText("")
         self._update_buttons()
 
     def _dpi_changed(self, _value: str) -> None:
+        self.preferences.set_pdf_dpi(self._pdf_dpi())
+        self.preferences.sync()
         if self.document is None or self.busy:
             return
         self._remember_page()
         try:
-            image = render_pdf_page(self.document[self.page_index], int(self.dpi_box.currentText()))
+            image = render_pdf_page(self.document[self.page_index], self._pdf_dpi())
             self.image = image
             self.image_view.set_image(image)
+            self.resolution_label.setText(f"{image.width} × {image.height} px")
         except Exception as exc:
             QMessageBox.critical(self, "تعذر تغيير الدقة", str(exc))
 
@@ -861,12 +1814,41 @@ class OCRWindow(QMainWindow):
         )
 
     @staticmethod
-    def _quality(result: OCRResult) -> str:
-        if result.confidence >= 85:
-            return "عالية"
-        if result.confidence >= 65:
-            return "متوسطة"
-        return "تحتاج مراجعة"
+    def _detected_language(text: str) -> str:
+        has_arabic = any("\u0600" <= character <= "\u06ff" for character in text)
+        has_latin = any(("A" <= character <= "Z") or ("a" <= character <= "z") for character in text)
+        if has_arabic and has_latin:
+            return "Arabic + English"
+        if has_arabic:
+            return "Arabic"
+        if has_latin:
+            return "English"
+        return "Not detected"
+
+    def _record_history(self, text: str, source_type: str | None = None) -> None:
+        if not text.strip():
+            return
+        if source_type is None:
+            source_type = "pdf" if self.document is not None else "image"
+        source_path = ""
+        source_name = "Screen capture" if source_type == "screen" else "OCR result"
+        if self.path is not None and self.path.is_file():
+            source_path = str(self.path.resolve())
+            source_name = self.path.name
+        elif self.path is not None and source_type != "screen":
+            source_name = self.path.name
+        record = HistoryRecord.create(
+            source_type=source_type,
+            source_name=source_name,
+            source_path=source_path,
+            languages=self.selected_languages(),
+            processing_seconds=self.last_processing_seconds,
+            text=text,
+        )
+        try:
+            self.history_store.add(record)
+        except OSError:
+            self._status("OCR completed, but the local history file could not be updated.")
 
     def start_screen_capture(self) -> None:
         if self.busy or self.screen_selector is not None:
@@ -916,9 +1898,14 @@ class OCRWindow(QMainWindow):
 
     def _start_worker(self, job, kind: str) -> None:
         self.busy = True
+        self.ocr_started_at = time.perf_counter()
         cancel_event = threading.Event()
         self.cancel_event = cancel_event
         self.progress.setRange(0, 0)
+        self.progress_percent.setText("Working")
+        self.processing_time_value.setText("—")
+        self.status_title.setText("OCR in progress")
+        self.ready_badge.setText("Processing")
         self._status("يجري استخراج النص…")
         self._update_buttons()
 
@@ -971,7 +1958,7 @@ class OCRWindow(QMainWindow):
             return
         self._remember_page()
         path = self.path
-        dpi = int(self.dpi_box.currentText())
+        dpi = self._pdf_dpi()
         languages = self.selected_languages()
         preprocess = self.preprocess_box.isChecked()
 
@@ -998,36 +1985,48 @@ class OCRWindow(QMainWindow):
                     completed, total = payload
                     self.progress.setRange(0, total)
                     self.progress.setValue(completed)
+                    self.progress_percent.setText(f"{round(completed / max(1, total) * 100)}%")
                     self._status(f"اكتملت الصفحة {completed} من {total}.")
                     continue
                 self.busy = False
                 self.cancel_event = None
+                if self.ocr_started_at is not None:
+                    self.last_processing_seconds = time.perf_counter() - self.ocr_started_at
+                self.ocr_started_at = None
+                self.processing_time_value.setText(f"{self.last_processing_seconds:.1f} seconds")
                 self.progress.setRange(0, 1)
-                self.progress.setValue(0)
+                self.progress.setValue(0 if kind in {"error", "cancelled"} else 1)
+                self.progress_percent.setText("0%" if kind in {"error", "cancelled"} else "100%")
                 if kind == "error":
                     QMessageBox.critical(self, "فشل استخراج النص", payload)
+                    self.status_title.setText("OCR failed")
+                    self.ready_badge.setText("Failed")
                     self._status("تعذر الاستخراج. تحقق من الملف وTesseract.")
                 elif kind == "cancelled":
                     if isinstance(payload, dict):
                         self.text_by_page.update(payload)
                     self.editor.setPlainText(self.text_by_page.get(self.page_index, ""))
+                    self.status_title.setText("OCR cancelled")
+                    self.ready_badge.setText("Cancelled")
                     self._status("تم إلغاء الاستخراج مع الاحتفاظ بالنتائج المكتملة.")
                 elif kind == "full":
                     index, result = payload
                     self.text_by_page[index] = result.text
                     if self.page_index == index:
                         self.editor.setPlainText(result.text)
-                    self._status(
-                        f"اكتمل استخراج الصفحة — ثقة {result.confidence:.1f}% "
-                        f"({self._quality(result)}) — {result.variant}, PSM {result.psm}."
-                    )
+                    self.status_title.setText("OCR Completed")
+                    self.ready_badge.setText("Ready")
+                    self.detected_language_value.setText(self._detected_language(result.text))
+                    self._record_history(result.text)
+                    self._status("تم استخراج النص. راجع النتيجة أو انسخها مباشرة.")
                 elif kind == "region":
                     self.region_editor.setPlainText(payload.text)
                     self._fit_region_result(payload.text)
-                    self._status(
-                        f"اكتمل الجزء المحدد — ثقة {payload.confidence:.1f}% "
-                        f"({self._quality(payload)}). راجع النتيجة ثم أدرجها."
-                    )
+                    self.status_title.setText("Selection extracted")
+                    self.ready_badge.setText("Ready")
+                    self.detected_language_value.setText(self._detected_language(payload.text))
+                    self._record_history(payload.text, "selection")
+                    self._status("تم استخراج المنطقة. راجع النتيجة ثم أدرجها في النص.")
                 elif kind == "screen":
                     image, result = payload
                     if self.document is not None:
@@ -1038,6 +2037,9 @@ class OCRWindow(QMainWindow):
                     self.image = image
                     self.text_by_page = {0: result.text}
                     self.image_view.set_image(image)
+                    self.resolution_label.setText(f"{image.width} × {image.height} px")
+                    self.source_badge.setText("Screen Capture")
+                    self._set_source_selection("screen")
                     self.editor.setPlainText(result.text)
                     self.region_editor.setPlainText("")
                     self.file_label.setText("لقطة من الشاشة")
@@ -1045,15 +2047,21 @@ class OCRWindow(QMainWindow):
                     self.content_splitter.setVisible(True)
                     if result.text.strip():
                         QApplication.clipboard().setText(result.text)
-                        self._status(
-                            f"اكتمل OCR ونسخ النص — ثقة {result.confidence:.1f}% "
-                            f"({self._quality(result)})."
-                        )
+                        self.status_title.setText("OCR Completed")
+                        self.ready_badge.setText("Ready")
+                        self.detected_language_value.setText(self._detected_language(result.text))
+                        self._record_history(result.text, "screen")
+                        self._status("تم استخراج النص ونسخه. راجع النتيجة أو احفظها.")
                     else:
                         self._status("اكتمل الالتقاط، لكن لم يُعثر على نص. جرّب مساحة أكبر أو لغة أخرى.")
                 elif kind == "all":
                     self.text_by_page.update(payload)
                     self.editor.setPlainText(self.text_by_page.get(self.page_index, ""))
+                    self.status_title.setText("OCR Completed")
+                    self.ready_badge.setText("Ready")
+                    combined = "\n\n".join(payload[index] for index in sorted(payload))
+                    self.detected_language_value.setText(self._detected_language(combined))
+                    self._record_history(combined, "pdf")
                     self._status(f"اكتمل استخراج {len(payload)} صفحة.")
                 self._update_buttons()
         except queue.Empty:
@@ -1063,7 +2071,8 @@ class OCRWindow(QMainWindow):
         splitter = self.right_splitter
         available = splitter.height()
         lines = sum(max(1, (len(line) + 54) // 55) for line in text.splitlines())
-        desired = min(int(available * 0.55), max(170, min(380, 115 + min(lines, 12) * 23)))
+        desired = min(int(available * 0.42), max(150, min(270, 100 + min(lines, 7) * 20)))
+        self.region_panel.setMaximumHeight(270)
         splitter.setSizes([max(180, available - desired), desired])
 
     def replace_text(self) -> None:
@@ -1080,7 +2089,7 @@ class OCRWindow(QMainWindow):
         self._remember_page()
         self._status("أُدرج النص المصحح. راجع موضعه قبل التصدير.")
 
-    def copy_field(self, editor: QPlainTextEdit) -> None:
+    def copy_field(self, editor: QTextEdit) -> None:
         text = editor.toPlainText()
         if text:
             QApplication.clipboard().setText(text)
@@ -1151,6 +2160,7 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("GlyphSnap")
     app.setApplicationDisplayName("GlyphSnap")
+    app.setOrganizationName("GlyphSnap")
     icon_path = application_icon()
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
