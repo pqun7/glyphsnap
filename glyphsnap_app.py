@@ -6,6 +6,7 @@ import queue
 import sys
 import threading
 import os
+import ctypes
 from pathlib import Path
 
 # PyInstaller extracts the Qt runtime beside the executable.  Register those
@@ -21,6 +22,17 @@ def application_dir() -> Path:
 
 def application_icon() -> Path:
     return application_dir() / "assets" / "app.ico"
+
+
+def configure_windows_identity() -> None:
+    """Give Windows a stable taskbar identity for icon and shortcut grouping."""
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "GlyphSnap.DesktopOCR.2"
+            )
+        except (AttributeError, OSError):
+            pass
 
 
 if getattr(sys, "frozen", False):
@@ -427,6 +439,9 @@ class OCRWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(TITLE)
+        icon_path = application_icon()
+        if icon_path.is_file():
+            self.setWindowIcon(QIcon(str(icon_path)))
         self.resize(1320, 840)
         self.setMinimumSize(980, 620)
         self.path: Path | None = None
@@ -1132,6 +1147,7 @@ def main() -> None:
     if len(sys.argv) >= 3 and sys.argv[1] == "--smoke-test":
         run_smoke_test(Path(sys.argv[2]), Path(sys.argv[3]) if len(sys.argv) >= 4 else Path.cwd() / "smoke-output")
         return
+    configure_windows_identity()
     app = QApplication(sys.argv)
     app.setApplicationName("GlyphSnap")
     app.setApplicationDisplayName("GlyphSnap")

@@ -1,15 +1,13 @@
 #define MyAppName "GlyphSnap"
-#define MyAppVersion "2.0.0"
+#define MyAppVersion "2.0.1"
 #define MyAppPublisher "Ali Alnazer Ahmed"
 #define MyAppURL "https://github.com/pqun7/glyphsnap"
 #define MyAppExeName "GlyphSnap.exe"
 #define MyOutputDir GetEnv("TEMP") + "\GlyphSnap-Inno"
 
-; Prefer the production build path, with compatibility for older builds.
+; Package only the canonical, smoke-tested production build.
 #if DirExists("builds\nuitka\glyphsnap.dist")
   #define MySourceFolder "builds\nuitka\glyphsnap.dist"
-#elif DirExists("dist-nuitka\glyphsnap.dist")
-  #define MySourceFolder "dist-nuitka\glyphsnap.dist"
 #else
   #error "GlyphSnap build not found. Run .\build_exe.ps1 before compiling the installer."
 #endif
@@ -18,7 +16,9 @@
 #define MyIconFile "assets\app.ico"
 
 [Setup]
-AppId={{D3F9A401-28B3-4A59-8392-123456789ABC}
+; A new product identity prevents Inno Setup from reusing the legacy
+; "Text Extractor OCR" installation directory stored in the registry.
+AppId={{3A7B9842-00A6-4E56-A769-27EF90483554}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -27,11 +27,12 @@ AppSupportURL={#MyAppURL}/issues
 AppUpdatesURL={#MyAppURL}/releases
 VersionInfoVersion={#MyAppVersion}
 
-DefaultDirName={localappdata}\Programs\{#MyAppName}
+DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
+UsePreviousAppDir=no
 
 DisableProgramGroupPage=yes
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog
 
 ; Compile in TEMP to avoid antivirus/file-indexer locks inside the repository.
@@ -89,13 +90,11 @@ Source: "{#MySourceFolder}\*"; \
 [Icons]
 ; Start Menu shortcut
 Name: "{group}\{#MyAppName}"; \
-    Filename: "{app}\{#MyAppExeName}"; \
-    IconFilename: "{#MyIconFile}"
+    Filename: "{app}\{#MyAppExeName}"
 
 ; Desktop shortcut
 Name: "{autodesktop}\{#MyAppName}"; \
     Filename: "{app}\{#MyAppExeName}"; \
-    IconFilename: "{#MyIconFile}"; \
     Tasks: desktopicon
 
 [UninstallDelete]

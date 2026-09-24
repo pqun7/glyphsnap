@@ -1,7 +1,13 @@
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
-$Python = (Get-Command python -ErrorAction Stop).Source
+$VenvPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
+$Python = if (Test-Path $VenvPython -PathType Leaf) {
+    $VenvPython
+}
+else {
+    (Get-Command python -ErrorAction Stop).Source
+}
 
 & $Python --version
 if ($LASTEXITCODE -ne 0) {
@@ -68,6 +74,12 @@ $NuitkaArgs = @(
 
     '--windows-icon-from-ico=assets/app.ico',
     '--include-data-files=assets/app.ico=assets/app.ico',
+    '--product-name=GlyphSnap',
+    '--file-description=GlyphSnap Desktop OCR',
+    '--company-name=Ali Alnazer Ahmed',
+    '--file-version=2.0.1.0',
+    '--product-version=2.0.1.0',
+    '--copyright=Copyright (C) 2026 Ali Alnazer Ahmed',
 
     '--nofollow-import-to=pymupdf',
     '--nofollow-import-to=fitz',

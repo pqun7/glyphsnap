@@ -6,7 +6,6 @@ $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
 $ProductionExe = Join-Path $PSScriptRoot 'builds\nuitka\glyphsnap.dist\GlyphSnap.exe'
-$LegacyExe = Join-Path $PSScriptRoot 'dist-nuitka\glyphsnap.dist\GlyphSnap.exe'
 $Installer = Join-Path $PSScriptRoot 'builds\installer\GlyphSnap_Setup.exe'
 $StageDirectory = Join-Path $env:TEMP 'GlyphSnap-Inno'
 $StageInstaller = Join-Path $StageDirectory 'GlyphSnap_Setup.exe'
@@ -18,8 +17,7 @@ if (-not $SkipAppBuild) {
     }
 }
 
-if (-not (Test-Path $ProductionExe -PathType Leaf) -and
-    -not (Test-Path $LegacyExe -PathType Leaf)) {
+if (-not (Test-Path $ProductionExe -PathType Leaf)) {
     throw "GlyphSnap.exe was not found. Run .\build_exe.ps1 first, or omit -SkipAppBuild."
 }
 
